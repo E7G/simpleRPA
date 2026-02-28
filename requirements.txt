@@ -1,0 +1,7 @@
+PyQt5>=5.15.0
+pyautogui>=0.9.53
+pynput>=1.7.6
+pywin32>=305; sys_platform == 'win32'
+Pillow>=9.0.0
+pyqt-fluent-widgets>=1.6.0
+opencv-python>=4.5.0

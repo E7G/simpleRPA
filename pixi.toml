@@ -1,0 +1,30 @@
+[workspace]
+name = "simpleRPA"
+version = "0.1.0"
+description = "Simple RPA GUI application with pyautogui and PyQt5"
+authors = ["User"]
+channels = ["conda-forge"]
+platforms = ["win-64"]
+
+[dependencies]
+python = ">=3.9,<3.13"
+pyqt = ">=5.15.0"
+pyautogui = ">=0.9.53"
+pynput = ">=1.7.6"
+pywin32 = ">=305"
+pillow = ">=9.0.0"
+opencv = ">=4.5.0"
+
+[pypi-dependencies]
+pyqt-fluent-widgets = ">=1.6.0"
+
+[tasks]
+start = "python main.py"
+build = "pyinstaller --onefile --windowed --name SimpleRPA main.py"
+
+[feature.dev.dependencies]
+pyinstaller = ">=6.0.0"
+
+[environments]
+default = { solve-group = "default" }
+dev = { features = ["dev"], solve-group = "default" }

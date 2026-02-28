@@ -1,0 +1,76 @@
+name: Build and Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+    
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install pyinstaller
+        pip install -r requirements.txt
+    
+    - name: Build executable
+      run: |
+        pyinstaller --onefile --windowed --name SimpleRPA --icon=icon.ico main.py
+      continue-on-error: true
+    
+    - name: Build without icon (fallback)
+      if: failure()
+      run: |
+        pyinstaller --onefile --windowed --name SimpleRPA main.py
+    
+    - name: Create distribution package
+      run: |
+        mkdir dist/package
+        cp dist/SimpleRPA.exe dist/package/
+        cp README.md dist/package/
+        cp LICENSE dist/package/
+        cp -r docs dist/package/
+        cd dist/package
+        Compress-Archive -Path * -DestinationPath ../../SimpleRPA-Windows.zip
+    
+    - name: Get version
+      id: get_version
+      run: echo "VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+      shell: bash
+    
+    - name: Create Release
+      uses: softprops/action-gh-release@v1
+      with:
+        tag_name: ${{ steps.get_version.outputs.VERSION }}
+        name: Release ${{ steps.get_version.outputs.VERSION }}
+        body: |
+          ## simpleRPA ${{ steps.get_version.outputs.VERSION }}
+          
+          ### 下载
+          - **SimpleRPA-Windows.zip** - Windows 懒人包，解压即用
+          
+          ### 使用方法
+          1. 下载 `SimpleRPA-Windows.zip`
+          2. 解压到任意目录
+          3. 双击 `SimpleRPA.exe` 运行
+          
+          ### 更新内容
+          查看 [CHANGELOG.md](https://github.com/E7G/simpleRPA/blob/main/CHANGELOG.md) 了解详细更新内容。
+        files: |
+          SimpleRPA-Windows.zip
+        draft: false
+        prerelease: false

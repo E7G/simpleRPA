@@ -126,21 +126,12 @@ simpleRPA/
 │   ├── property_panel.py # 属性面板
 │   └── ...
 ├── utils/          # 工具模块
-├── example/        # 示例脚本
 ├── docs/           # 文档
 ├── tests/          # 测试文件
 ├── main.py         # 程序入口
 ├── requirements.txt # 依赖列表
 └── pixi.toml       # Pixi 配置
 ```
-
-## 示例脚本
-
-项目包含了一些示例脚本，位于 `example/` 目录：
-
-- `ssq.py` - 三国杀小程序自动领取
-- `sfl.py` - 神风录自动化
-- `qdyl.py` - 其他自动化示例
 
 ## 文档
 

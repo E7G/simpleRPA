@@ -2,6 +2,8 @@
 
 <div align="center">
 
+<img src="icon.png" alt="simpleRPA Logo" width="128" height="128">
+
 **一个简单易用的 RPA（机器人流程自动化）框架**
 
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)

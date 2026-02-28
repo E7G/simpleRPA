@@ -16,6 +16,19 @@ jobs:
     - name: Checkout code
       uses: actions/checkout@v4
     
+    - name: Get version
+      id: get_version
+      run: echo "VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+      shell: bash
+    
+    - name: Update version in code
+      run: |
+        $version = "${{ steps.get_version.outputs.VERSION }}".TrimStart('v')
+        $content = Get-Content "gui/main_window.py" -Raw
+        $content = $content -replace 'APP_VERSION = "[^"]*"', "APP_VERSION = `"$version`""
+        Set-Content "gui/main_window.py" -Value $content -NoNewline
+        Write-Host "Updated APP_VERSION to $version"
+    
     - name: Set up Python
       uses: actions/setup-python@v5
       with:
@@ -46,11 +59,6 @@ jobs:
         cp -r docs dist/package/
         cd dist/package
         Compress-Archive -Path * -DestinationPath ../../SimpleRPA-Windows.zip
-    
-    - name: Get version
-      id: get_version
-      run: echo "VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
-      shell: bash
     
     - name: Create Release
       uses: softprops/action-gh-release@v1

@@ -1,5 +1,7 @@
 import sys
 import os
+import threading
+import webbrowser
 from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout,
     QFileDialog, QApplication, QFrame
@@ -22,6 +24,7 @@ from core.exporter import Exporter
 from core.action_group import LocalActionGroupManager
 from utils.config import Config
 from utils.window_utils import WindowUtils, WindowInfo
+from utils.update_checker import UpdateChecker
 
 from .action_panel import ActionPanel
 from .script_editor import ScriptEditor
@@ -30,12 +33,16 @@ from .recorder_panel import RecorderPanel
 from .widgets import WindowSelector
 
 
+APP_VERSION = "0.1.0"
+
+
 class MainWindow(FluentWindow):
     _update_progress_signal = pyqtSignal(float, int, int)
     _update_state_signal = pyqtSignal(object, str)
     _update_finished_signal = pyqtSignal(bool, str)
     _update_error_signal = pyqtSignal(str, str)
     _update_action_start_signal = pyqtSignal(object, int, str)
+    _update_available_signal = pyqtSignal(object)
     
     def __init__(self):
         super().__init__()
@@ -62,6 +69,10 @@ class MainWindow(FluentWindow):
         self._update_finished_signal.connect(self._on_player_finished)
         self._update_error_signal.connect(self._on_player_error_gui)
         self._update_action_start_signal.connect(self._on_player_action_start_gui)
+        self._update_available_signal.connect(self._on_update_available)
+        
+        self._update_checker = UpdateChecker(APP_VERSION)
+        self._check_for_update()
     
     def _setup_ui(self):
         setTheme(Theme.AUTO)
@@ -929,3 +940,31 @@ class MainWindow(FluentWindow):
         current_route_key = self._script_editor.get_current_route_key()
         if route_key == current_route_key:
             self._status_label.setText(f"执行错误: {error}")
+    
+    def _check_for_update(self):
+        def check():
+            release_info = self._update_checker.check_for_update()
+            if release_info:
+                self._update_available_signal.emit(release_info)
+        
+        thread = threading.Thread(target=check, daemon=True)
+        thread.start()
+    
+    def _on_update_available(self, release_info):
+        version = release_info.version
+        download_url = release_info.download_url or release_info.html_url
+        
+        message = f"发现新版本 {version}！\n\n"
+        if release_info.release_notes:
+            notes = release_info.release_notes[:200]
+            if len(release_info.release_notes) > 200:
+                notes += "..."
+            message += f"更新内容:\n{notes}\n\n"
+        message += "是否前往下载？"
+        
+        box = MessageBox('发现新版本', message, self)
+        box.yesButton.setText('立即下载')
+        box.cancelButton.setText('稍后提醒')
+        
+        if box.exec():
+            webbrowser.open(download_url)

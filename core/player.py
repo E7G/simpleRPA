@@ -2,7 +2,7 @@ import time
 import threading
 from typing import List, Callable, Optional, Tuple
 from enum import Enum
-from .actions import Action
+from .actions import Action, ActionType
 
 
 class PlayerState(Enum):
@@ -10,6 +10,54 @@ class PlayerState(Enum):
     PLAYING = "playing"
     PAUSED = "paused"
     STOPPED = "stopped"
+
+
+class WindowOffsetProvider:
+    def __init__(self, hwnd: int = 0, window_utils=None):
+        self._hwnd = hwnd
+        self._window_utils = window_utils
+        self._last_offset: Optional[Tuple[int, int]] = None
+        self._last_error: Optional[str] = None
+    
+    def set_hwnd(self, hwnd: int):
+        self._hwnd = hwnd
+    
+    def set_window_utils(self, window_utils):
+        self._window_utils = window_utils
+    
+    def get_current_offset(self) -> Tuple[Optional[Tuple[int, int]], Optional[str]]:
+        if not self._hwnd:
+            return None, None
+        
+        if not self._window_utils:
+            return None, "窗口工具不可用"
+        
+        try:
+            window_info = self._window_utils.get_window_by_hwnd(self._hwnd)
+            if not window_info:
+                return None, f"窗口不存在或已关闭 (句柄: {self._hwnd})"
+            
+            self._last_offset = (window_info.x, window_info.y)
+            self._last_error = None
+            return self._last_offset, None
+        except Exception as e:
+            self._last_error = str(e)
+            return None, self._last_error
+    
+    def validate_window(self) -> Tuple[bool, str]:
+        if not self._hwnd:
+            return True, ""
+        
+        if not self._window_utils:
+            return True, ""
+        
+        try:
+            window_info = self._window_utils.get_window_by_hwnd(self._hwnd)
+            if not window_info:
+                return False, f"窗口不存在或已关闭 (句柄: {self._hwnd})"
+            return True, ""
+        except Exception as e:
+            return False, str(e)
 
 
 class Player:
@@ -32,6 +80,10 @@ class Player:
         self._window_offset: Optional[Tuple[int, int]] = None
         self._start_time: float = 0
         
+        self._window_offset_provider: Optional[WindowOffsetProvider] = None
+        self._window_hwnd: int = 0
+        self._window_utils = None
+        
         self._callbacks = {
             'on_action_start': [],
             'on_action_end': [],
@@ -39,7 +91,8 @@ class Player:
             'on_progress': [],
             'on_error': [],
             'on_finished': [],
-            'on_repeat_changed': []
+            'on_repeat_changed': [],
+            'on_window_error': []
         }
     
     def set_local_group_manager(self, manager):
@@ -92,6 +145,73 @@ class Player:
     
     def set_window_offset(self, offset: Optional[Tuple[int, int]]):
         self._window_offset = offset
+    
+    def set_window_hwnd(self, hwnd: int, window_utils=None):
+        self._window_hwnd = hwnd
+        self._window_utils = window_utils
+        
+        if hwnd and window_utils:
+            if not self._window_offset_provider:
+                self._window_offset_provider = WindowOffsetProvider(hwnd, window_utils)
+            else:
+                self._window_offset_provider.set_hwnd(hwnd)
+                self._window_offset_provider.set_window_utils(window_utils)
+        else:
+            self._window_offset_provider = None
+    
+    def _get_realtime_window_offset(self) -> Tuple[Optional[Tuple[int, int]], Optional[str]]:
+        if not self._window_offset_provider:
+            return self._window_offset, None
+        
+        offset, error = self._window_offset_provider.get_current_offset()
+        if error:
+            return None, error
+        
+        return offset, None
+    
+    def _validate_window_before_action(self, action: Action) -> Tuple[bool, Optional[str]]:
+        if not self._window_offset_provider:
+            return True, None
+        
+        needs_window = action.action_type in [
+            ActionType.MOUSE_CLICK_RELATIVE,
+            ActionType.MOUSE_MOVE_RELATIVE,
+            ActionType.MOUSE_DRAG,
+        ]
+        
+        if action.use_relative_coords:
+            needs_window = True
+        
+        if not needs_window:
+            return True, None
+        
+        is_valid, error = self._window_offset_provider.validate_window()
+        if not is_valid:
+            return False, error
+        
+        return True, None
+    
+    def _activate_window_before_action(self, action: Action):
+        if not self._window_hwnd or not self._window_utils:
+            return
+        
+        needs_window = action.action_type in [
+            ActionType.MOUSE_CLICK_RELATIVE,
+            ActionType.MOUSE_MOVE_RELATIVE,
+            ActionType.MOUSE_DRAG,
+        ]
+        
+        if action.use_relative_coords:
+            needs_window = True
+        
+        if not needs_window:
+            return
+        
+        try:
+            self._window_utils.activate_window(self._window_hwnd)
+            time.sleep(0.05)
+        except Exception as e:
+            print(f"[激活窗口失败] {e}")
     
     def play(self):
         if self.state == PlayerState.PLAYING:
@@ -237,6 +357,27 @@ class Player:
                     self._emit('on_progress', -1, i, repeat_count)
                     continue
                 
+                is_valid, window_error = self._validate_window_before_action(action)
+                if not is_valid:
+                    self._emit('on_window_error', action, i, window_error)
+                    self.state = PlayerState.IDLE
+                    self._emit('on_state_changed', self.state)
+                    self._emit('on_finished', False)
+                    return
+                
+                current_offset, offset_error = self._get_realtime_window_offset()
+                if offset_error:
+                    self._emit('on_window_error', action, i, offset_error)
+                    self.state = PlayerState.IDLE
+                    self._emit('on_state_changed', self.state)
+                    self._emit('on_finished', False)
+                    return
+                
+                if current_offset is None:
+                    current_offset = self._window_offset
+                
+                self._activate_window_before_action(action)
+                
                 adjusted_delay_before = action.delay_before / self.speed if self.speed > 0 else action.delay_before
                 adjusted_delay_after = action.delay_after / self.speed if self.speed > 0 else action.delay_after
                 
@@ -252,7 +393,7 @@ class Player:
                 self._emit('on_action_start', action, i)
                 
                 try:
-                    success = action.execute(window_offset=self._window_offset, should_stop=lambda: self._stop_flag, local_group_manager=self._local_group_manager)
+                    success = action.execute(window_offset=current_offset, should_stop=lambda: self._stop_flag, local_group_manager=self._local_group_manager)
                     self._emit('on_action_end', action, i, success)
                 except Exception as e:
                     self._emit('on_error', action, i, str(e))
@@ -288,6 +429,21 @@ class Player:
         
         action = self.actions[index]
         
+        is_valid, window_error = self._validate_window_before_action(action)
+        if not is_valid:
+            self._emit('on_window_error', action, index, window_error)
+            return False
+        
+        current_offset, offset_error = self._get_realtime_window_offset()
+        if offset_error:
+            self._emit('on_window_error', action, index, offset_error)
+            return False
+        
+        if current_offset is None:
+            current_offset = window_offset or self._window_offset
+        
+        self._activate_window_before_action(action)
+        
         adjusted_delay_before = action.delay_before / self.speed if self.speed > 0 else action.delay_before
         adjusted_delay_after = action.delay_after / self.speed if self.speed > 0 else action.delay_after
         
@@ -297,7 +453,7 @@ class Player:
         self._emit('on_action_start', action, index)
         
         try:
-            success = action.execute(window_offset=window_offset or self._window_offset, should_stop=lambda: self._stop_flag)
+            success = action.execute(window_offset=current_offset, should_stop=lambda: self._stop_flag)
             self._emit('on_action_end', action, index, success)
             
             if adjusted_delay_after > 0:

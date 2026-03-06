@@ -359,6 +359,41 @@ class WindowSelector(QWidget):
         if title:
             self._window_combo.addItem(title, hwnd)
             self._window_combo.setCurrentText(title)
+    
+    def validate_window(self) -> Tuple[bool, str, Optional[int]]:
+        if not self._selected_window:
+            return True, "", None
+        
+        if not self._win32_available:
+            return True, "", self._selected_window
+        
+        try:
+            import win32gui
+            
+            if not win32gui.IsWindow(self._selected_window):
+                title = self.get_selected_title()
+                return False, f"窗口已关闭或不存在\n窗口标题: {title}\n句柄: {self._selected_window}", self._selected_window
+            
+            current_title = win32gui.GetWindowText(self._selected_window)
+            if not current_title:
+                return False, f"窗口可能已无响应\n句柄: {self._selected_window}", self._selected_window
+            
+            return True, current_title, self._selected_window
+            
+        except Exception as e:
+            return False, f"验证窗口失败: {str(e)}\n句柄: {self._selected_window}", self._selected_window
+    
+    def refresh_and_validate(self) -> Tuple[bool, str]:
+        if not self._selected_window:
+            return True, ""
+        
+        is_valid, message, _ = self.validate_window()
+        
+        if not is_valid:
+            self._selected_window = None
+            self._window_combo.setCurrentIndex(0)
+        
+        return is_valid, message
 
 
 class KeySequenceDialog(QDialog):

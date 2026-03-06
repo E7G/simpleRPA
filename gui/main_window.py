@@ -43,6 +43,7 @@ class MainWindow(FluentWindow):
     _update_error_signal = pyqtSignal(str, str)
     _update_action_start_signal = pyqtSignal(object, int, str)
     _update_available_signal = pyqtSignal(object)
+    _update_window_error_signal = pyqtSignal(object, int, str)
     
     def __init__(self):
         super().__init__()
@@ -70,6 +71,7 @@ class MainWindow(FluentWindow):
         self._update_error_signal.connect(self._on_player_error_gui)
         self._update_action_start_signal.connect(self._on_player_action_start_gui)
         self._update_available_signal.connect(self._on_update_available)
+        self._update_window_error_signal.connect(self._on_window_error_gui)
         
         self._update_checker = UpdateChecker(APP_VERSION)
         self._check_for_update()
@@ -308,6 +310,7 @@ class MainWindow(FluentWindow):
             player.add_callback('on_state_changed', lambda s, rk=route_key: self._on_player_state_changed_thread(s, rk))
             player.add_callback('on_finished', lambda s, rk=route_key: self._on_player_finished_thread(s, rk))
             player.add_callback('on_error', lambda a, i, e, rk=route_key: self._on_player_error_thread(a, i, e, rk))
+            player.add_callback('on_window_error', lambda a, i, e, rk=route_key: self._on_window_error_thread(a, i, e, rk))
             self._tab_players[route_key] = player
         
         self._update_run_buttons_for_current_tab()
@@ -707,6 +710,18 @@ class MainWindow(FluentWindow):
             MessageBox('警告', '脚本为空，请先添加动作', self).exec()
             return
         
+        selected_hwnd = self._window_selector.get_selected_hwnd()
+        if selected_hwnd:
+            is_valid, message = self._window_selector.refresh_and_validate()
+            if not is_valid:
+                box = MessageBox('窗口未找到', f"{message}\n\n请重新选择目标窗口或取消绑定后再执行。", self)
+                box.yesButton.setText('重新选择窗口')
+                box.cancelButton.setText('取消执行')
+                
+                if box.exec():
+                    self._window_selector.refresh_windows()
+                return
+        
         player.set_actions(actions)
         player.set_speed(self._speed_spin.value())
         player.set_repeat_count(self._repeat_spin.value())
@@ -715,8 +730,8 @@ class MainWindow(FluentWindow):
         
         window_offset = self._window_selector.get_window_offset()
         player.set_window_offset(window_offset)
+        player.set_window_hwnd(selected_hwnd or 0, self._window_utils)
         
-        selected_hwnd = self._window_selector.get_selected_hwnd()
         if selected_hwnd:
             self._window_utils.activate_window(selected_hwnd)
         
@@ -833,9 +848,20 @@ class MainWindow(FluentWindow):
         if not actions or index < 0 or index >= len(actions):
             return
         
+        selected_hwnd = self._window_selector.get_selected_hwnd()
+        if selected_hwnd:
+            is_valid, message = self._window_selector.refresh_and_validate()
+            if not is_valid:
+                box = MessageBox('窗口未找到', f"{message}\n\n请重新选择目标窗口或取消绑定后再执行。", self)
+                box.yesButton.setText('重新选择窗口')
+                box.cancelButton.setText('取消执行')
+                
+                if box.exec():
+                    self._window_selector.refresh_windows()
+                return
+        
         window_offset = self._window_selector.get_window_offset()
         
-        selected_hwnd = self._window_selector.get_selected_hwnd()
         if selected_hwnd:
             self._window_utils.activate_window(selected_hwnd)
         
@@ -886,6 +912,9 @@ class MainWindow(FluentWindow):
     
     def _on_player_error_thread(self, action: Action, index: int, error: str, route_key: str):
         self._update_error_signal.emit(error, route_key)
+    
+    def _on_window_error_thread(self, action: Action, index: int, error: str, route_key: str):
+        self._update_window_error_signal.emit(action, index, error)
     
     def _on_player_progress(self, progress: float, action_index: int, repeat: int):
         player = self._get_current_player()
@@ -968,3 +997,16 @@ class MainWindow(FluentWindow):
         
         if box.exec():
             webbrowser.open(download_url)
+    
+    def _on_window_error_gui(self, action, index: int, error: str):
+        self._run_btn.setEnabled(True)
+        self._pause_btn.setEnabled(False)
+        self._stop_btn.setEnabled(False)
+        self._progress_bar.setVisible(False)
+        
+        self._status_label.setText(f"窗口错误: {error}")
+        
+        box = MessageBox('窗口错误', f"执行过程中发生窗口错误:\n\n{error}\n\n请检查目标窗口是否正常。", self)
+        box.yesButton.setText('确定')
+        box.cancelButton.hide()
+        box.exec()

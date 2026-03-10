@@ -1,10 +1,10 @@
 from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QDialog, QApplication,
-    QLabel, QRubberBand
+    QLabel, QRubberBand, QListWidgetItem
 )
 from PyQt5.QtCore import Qt, pyqtSignal, QTimer, QRect, QPoint
 from PyQt5.QtGui import QPixmap, QPainter, QColor, QPen, QFont
-from typing import Optional, Tuple
+from typing import Optional, Tuple, Dict
 import sys
 
 from qfluentwidgets import (
@@ -266,8 +266,41 @@ class WindowSelector(QWidget):
     def _on_combo_changed(self, index: int):
         if index > 0:
             hwnd = self._window_combo.itemData(index)
-            self._selected_window = hwnd
-            self.window_selected.emit(hwnd)
+            if hwnd:
+                self._selected_window = hwnd
+                self.window_selected.emit(hwnd)
+                self._ensure_window_exists(hwnd)
+    
+    def _ensure_window_exists(self, hwnd: int):
+        if not self._win32_available:
+            return
+        
+        try:
+            import win32gui
+            if not win32gui.IsWindow(hwnd):
+                title = self._window_combo.currentText()
+                self._try_launch_window(title)
+        except Exception:
+            pass
+    
+    def _try_launch_window(self, window_title: str):
+        from core.command_manager import CommandManager
+        cmd_manager = CommandManager.get_instance()
+        
+        commands = cmd_manager.get_all_commands()
+        for cmd in commands:
+            if cmd.window_title_pattern and cmd.window_title_pattern.lower() in window_title.lower():
+                success, message, already_running = cmd_manager.check_and_launch(cmd.id)
+                if success and not already_running:
+                    from qfluentwidgets import InfoBar, InfoBarPosition
+                    InfoBar.success(
+                        title="窗口已启动",
+                        content=f"已自动启动: {cmd.name}",
+                        parent=self,
+                        position=InfoBarPosition.TOP,
+                        duration=2000
+                    )
+                break
     
     def _toggle_pick_mode(self, checked: bool):
         self._pick_mode = checked
@@ -337,10 +370,56 @@ class WindowSelector(QWidget):
             return None
     
     def get_window_offset(self) -> Optional[Tuple[int, int]]:
-        rect = self.get_window_rect()
-        if rect:
-            return (rect[0], rect[1])
-        return None
+        """
+        获取窗口客户区左上角在屏幕上的坐标
+        
+        使用 ClientToScreen API 确保坐标准确，自动处理：
+        - 窗口边框和标题栏
+        - DPI 缩放
+        - 多显示器设置
+        """
+        if not self._selected_window:
+            return None
+        
+        from utils.window_utils import WindowUtils
+        window_utils = WindowUtils()
+        
+        client_screen_pos = window_utils.client_to_screen_coords(self._selected_window, 0, 0)
+        return client_screen_pos
+    
+    def _get_client_offset(self) -> Optional[Tuple[int, int]]:
+        if not self._selected_window:
+            return None
+        
+        from utils.window_utils import WindowUtils
+        window_utils = WindowUtils()
+        return window_utils.get_client_offset(self._selected_window)
+    
+    def screen_to_client(self, screen_x: int, screen_y: int) -> Optional[Tuple[int, int]]:
+        """
+        将屏幕坐标转换为窗口客户区坐标
+        
+        使用 Windows ScreenToClient API 确保转换准确
+        """
+        if not self._selected_window:
+            return None
+        
+        from utils.window_utils import WindowUtils
+        window_utils = WindowUtils()
+        return window_utils.screen_to_client_coords(self._selected_window, screen_x, screen_y)
+    
+    def client_to_screen(self, client_x: int, client_y: int) -> Optional[Tuple[int, int]]:
+        """
+        将窗口客户区坐标转换为屏幕坐标
+        
+        使用 Windows ClientToScreen API 确保转换准确
+        """
+        if not self._selected_window:
+            return None
+        
+        from utils.window_utils import WindowUtils
+        window_utils = WindowUtils()
+        return window_utils.client_to_screen_coords(self._selected_window, client_x, client_y)
     
     def get_selected_hwnd(self) -> int:
         return self._selected_window or 0
@@ -359,6 +438,137 @@ class WindowSelector(QWidget):
         if title:
             self._window_combo.addItem(title, hwnd)
             self._window_combo.setCurrentText(title)
+
+
+class WindowPickerDialog(QDialog):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("选择窗口")
+        self.setMinimumSize(400, 300)
+        self._selected_window = None
+        self._setup_ui()
+        self._load_windows()
+    
+    def _setup_ui(self):
+        layout = QVBoxLayout(self)
+        layout.setSpacing(12)
+        
+        from qfluentwidgets import SubtitleLabel, CaptionLabel
+        
+        title_label = SubtitleLabel("请选择目标窗口")
+        layout.addWidget(title_label)
+        
+        tip_label = CaptionLabel("点击列表中的窗口或使用\"拾取\"按钮选择")
+        tip_label.setStyleSheet("color: #666;")
+        layout.addWidget(tip_label)
+        
+        from qfluentwidgets import ListWidget
+        
+        self._window_list = ListWidget()
+        self._window_list.setMinimumHeight(200)
+        self._window_list.itemDoubleClicked.connect(self._on_item_double_clicked)
+        layout.addWidget(self._window_list)
+        
+        btn_layout = QHBoxLayout()
+        btn_layout.addStretch()
+        
+        self._pick_btn = PushButton("拾取窗口")
+        self._pick_btn.clicked.connect(self._start_pick)
+        btn_layout.addWidget(self._pick_btn)
+        
+        self._ok_btn = PrimaryPushButton("确定")
+        self._ok_btn.clicked.connect(self.accept)
+        btn_layout.addWidget(self._ok_btn)
+        
+        self._cancel_btn = PushButton("取消")
+        self._cancel_btn.clicked.connect(self.reject)
+        btn_layout.addWidget(self._cancel_btn)
+        
+        layout.addLayout(btn_layout)
+    
+    def _load_windows(self):
+        from utils.window_utils import WindowUtils
+        window_utils = WindowUtils()
+        windows = window_utils.get_all_windows()
+        
+        self._window_list.clear()
+        for window in windows:
+            if window.title and window.width > 100 and window.height > 100:
+                item = QListWidgetItem(f"{window.title} (hwnd: {window.hwnd})")
+                item.setData(Qt.UserRole, {
+                    'hwnd': window.hwnd,
+                    'title': window.title,
+                    'rect': window.rect
+                })
+                self._window_list.addItem(item)
+    
+    def _on_item_double_clicked(self, item):
+        self.accept()
+    
+    def _start_pick(self):
+        self.hide()
+        
+        from pynput import mouse
+        
+        def on_click(x, y, button, pressed):
+            if pressed:
+                self._select_window_at_point(int(x), int(y))
+                return False
+        
+        self._listener = mouse.Listener(on_click=on_click)
+        self._listener.start()
+    
+    def _select_window_at_point(self, x: int, y: int):
+        try:
+            import win32gui
+            
+            hwnd = win32gui.WindowFromPoint((x, y))
+            
+            while hwnd:
+                parent = win32gui.GetParent(hwnd)
+                if parent == 0:
+                    break
+                hwnd = parent
+            
+            title = win32gui.GetWindowText(hwnd)
+            
+            self._selected_window = {
+                'hwnd': hwnd,
+                'title': title,
+                'process': self._get_process_name(hwnd)
+            }
+            
+            from PyQt5.QtCore import QMetaObject, Qt
+            QMetaObject.invokeMethod(self, "accept", Qt.QueuedConnection)
+            
+        except Exception:
+            self.show()
+    
+    def _get_process_name(self, hwnd: int) -> str:
+        try:
+            import win32process
+            import psutil
+            
+            _, pid = win32process.GetWindowThreadProcessId(hwnd)
+            process = psutil.Process(pid)
+            return process.name()
+        except:
+            return ""
+    
+    def get_selected_window(self) -> Optional[Dict]:
+        if self._selected_window:
+            return self._selected_window
+        
+        current_item = self._window_list.currentItem()
+        if current_item:
+            data = current_item.data(Qt.UserRole)
+            return {
+                'hwnd': data['hwnd'],
+                'title': data['title'],
+                'process': self._get_process_name(data['hwnd'])
+            }
+        
+        return None
 
 
 class KeySequenceDialog(QDialog):

@@ -6,7 +6,22 @@ import os
 
 
 class PreviewOverlay(QWidget):
-    def __init__(self, duration: int = 2000):
+    _instance = None
+    
+    @classmethod
+    def get_instance(cls, duration: int = 2000):
+        if cls._instance is None:
+            cls._instance = PreviewOverlay.__new__(cls)
+            cls._instance._init_widget(duration)
+        else:
+            cls._instance._duration = duration
+            cls._instance._preview_type = None
+            cls._instance._preview_data = {}
+            cls._instance._blink_state = True
+            cls._instance._blink_count = 0
+        return cls._instance
+    
+    def _init_widget(self, duration: int = 2000):
         super().__init__()
         self._duration = duration
         self._preview_type = None
@@ -27,6 +42,9 @@ class PreviewOverlay(QWidget):
         self._blink_count = 0
         
         self._setup_geometry()
+    
+    def __init__(self, duration: int = 2000):
+        pass
     
     def _setup_geometry(self):
         screens = QGuiApplication.screens()

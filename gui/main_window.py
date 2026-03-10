@@ -31,6 +31,7 @@ from .script_editor import ScriptEditor
 from .property_panel import PropertyPanel
 from .recorder_panel import RecorderPanel
 from .widgets import WindowSelector
+from .command_panel import CommandManagerWidget
 
 
 APP_VERSION = "0.1.0"
@@ -90,6 +91,14 @@ class MainWindow(FluentWindow):
         self.addSubInterface(
             self.homeInterface, FluentIcon.HOME, '主页'
         )
+        
+        self.commandInterface = QWidget()
+        self.commandInterface.setObjectName('commandInterface')
+        self.addSubInterface(
+            self.commandInterface, FluentIcon.APPLICATION, '命令管理'
+        )
+        
+        self._setup_command_interface()
         
         main_layout = QVBoxLayout(self.homeInterface)
         main_layout.setContentsMargins(24, 20, 24, 24)
@@ -270,6 +279,14 @@ class MainWindow(FluentWindow):
         self._action_panel.setVisible(key == 'actions')
         self._recorder_panel.setVisible(key == 'recorder')
     
+    def _setup_command_interface(self):
+        layout = QVBoxLayout(self.commandInterface)
+        layout.setContentsMargins(24, 20, 24, 24)
+        layout.setSpacing(16)
+        
+        self._command_panel = CommandManagerWidget()
+        layout.addWidget(self._command_panel)
+    
     def _setup_connections(self):
         self._action_panel.action_added.connect(self._on_action_added)
         self._script_editor.action_selected.connect(self._on_action_selected)
@@ -286,10 +303,15 @@ class MainWindow(FluentWindow):
         self._script_editor.tab_changed.connect(self._on_script_tab_changed)
         self._script_editor.tab_close_requested.connect(self._on_tab_close_requested)
         self._script_editor.set_modified_check_callback(self._is_tab_modified)
+        self._script_editor.preview_state_changed.connect(self._on_preview_state_changed)
         
         self._window_selector.window_selected.connect(self._on_window_selected)
         
-        self._create_player_for_tab(self._script_editor.get_current_route_key())
+        self._script_editor.initialize()
+        
+        route_key = self._script_editor.get_current_route_key()
+        if route_key:
+            self._create_player_for_tab(route_key)
     
     def _on_window_selected(self, hwnd):
         offset = self._window_selector.get_window_offset()
@@ -351,22 +373,34 @@ class MainWindow(FluentWindow):
     
     def _update_run_buttons_for_current_tab(self):
         player = self._get_current_player()
+        current_tab = self._script_editor._get_current_tab()
+        is_preview_active = current_tab and hasattr(current_tab, 'is_preview_active') and current_tab.is_preview_active()
+        is_preview_playing = current_tab and hasattr(current_tab, 'is_preview_playing') and current_tab.is_preview_playing()
+        
         if player:
             state = player.state
             is_running = state in [PlayerState.PLAYING, PlayerState.PAUSED, PlayerState.STOPPED]
-            self._run_btn.setEnabled(not is_running)
-            self._pause_btn.setEnabled(state == PlayerState.PLAYING or state == PlayerState.PAUSED)
-            self._stop_btn.setEnabled(is_running)
+            self._run_btn.setEnabled(not is_running and not is_preview_active)
+            self._pause_btn.setEnabled((state == PlayerState.PLAYING or state == PlayerState.PAUSED) or is_preview_active)
+            self._stop_btn.setEnabled(is_running or is_preview_active)
             
             if state == PlayerState.PAUSED:
+                self._pause_btn.setText("继续")
+            elif is_preview_active and not is_preview_playing:
                 self._pause_btn.setText("继续")
             else:
                 self._pause_btn.setText("暂停")
         else:
-            self._run_btn.setEnabled(True)
-            self._pause_btn.setEnabled(False)
-            self._stop_btn.setEnabled(False)
-            self._pause_btn.setText("暂停")
+            self._run_btn.setEnabled(not is_preview_active)
+            self._pause_btn.setEnabled(is_preview_active)
+            self._stop_btn.setEnabled(is_preview_active)
+            if is_preview_active and not is_preview_playing:
+                self._pause_btn.setText("继续")
+            else:
+                self._pause_btn.setText("暂停")
+    
+    def _on_preview_state_changed(self, state: str, is_active: bool):
+        self._update_run_buttons_for_current_tab()
     
     def _load_settings(self):
         geometry = self._config.window_geometry
@@ -700,7 +734,12 @@ class MainWindow(FluentWindow):
     def _run_script(self):
         player = self._get_current_player()
         if not player:
-            return
+            route_key = self._script_editor.get_current_route_key()
+            if route_key:
+                self._create_player_for_tab(route_key)
+                player = self._get_current_player()
+            if not player:
+                return
         
         actions = self._script_editor.get_actions()
         if not actions:
@@ -716,6 +755,9 @@ class MainWindow(FluentWindow):
         window_offset = self._window_selector.get_window_offset()
         player.set_window_offset(window_offset)
         
+        window_title = self._window_selector.get_selected_title()
+        player.set_window_title(window_title)
+        
         selected_hwnd = self._window_selector.get_selected_hwnd()
         if selected_hwnd:
             self._window_utils.activate_window(selected_hwnd)
@@ -723,6 +765,8 @@ class MainWindow(FluentWindow):
         for action in actions:
             if action.action_type in [ActionType.MOUSE_CLICK_RELATIVE, ActionType.MOUSE_MOVE_RELATIVE]:
                 action.use_relative_coords = True
+                if window_title:
+                    action.window_title = window_title
         
         self._run_btn.setEnabled(False)
         self._pause_btn.setEnabled(True)
@@ -741,6 +785,18 @@ class MainWindow(FluentWindow):
             self._status_label.setText("无限循环模式")
     
     def _pause_script(self):
+        current_tab = self._script_editor._get_current_tab()
+        if current_tab and hasattr(current_tab, 'is_preview_active') and current_tab.is_preview_active():
+            current_tab._toggle_pause_preview()
+            is_playing = current_tab.is_preview_playing()
+            if is_playing:
+                self._pause_btn.setText("暂停")
+                self._status_label.setText("预览中...")
+            else:
+                self._pause_btn.setText("继续")
+                self._status_label.setText("预览已暂停")
+            return
+        
         player = self._get_current_player()
         if not player:
             return
@@ -754,6 +810,13 @@ class MainWindow(FluentWindow):
             self._status_label.setText("正在执行...")
     
     def _stop_script(self):
+        current_tab = self._script_editor._get_current_tab()
+        if current_tab and hasattr(current_tab, 'is_preview_active') and current_tab.is_preview_active():
+            current_tab._stop_preview()
+            self._status_label.setText("预览已停止")
+            self._update_run_buttons_for_current_tab()
+            return
+        
         player = self._get_current_player()
         if player:
             player.stop()

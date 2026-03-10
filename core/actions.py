@@ -64,6 +64,7 @@ class Action:
     delay_after: float = 0.0
     window_title: Optional[str] = None
     use_relative_coords: bool = False
+    background_mode: bool = False
     name: str = ""
     condition: str = ""
     repeat_count: int = 1
@@ -86,6 +87,7 @@ class Action:
         name_prefix = f"[{self.name}] " if self.name else ""
         delay_prefix = f"[等待{self.delay_before:.2f}秒] " if self.delay_before > 0.05 else ""
         repeat_suffix = f" (x{self.repeat_count})" if self.repeat_count > 1 else ""
+        bg_suffix = " [后台]" if self.background_mode else ""
         desc_map = {
             ActionType.MOUSE_CLICK: f"鼠标单击 ({self.params.get('x', 0)}, {self.params.get('y', 0)})",
             ActionType.MOUSE_DOUBLE_CLICK: f"鼠标双击 ({self.params.get('x', 0)}, {self.params.get('y', 0)})",
@@ -105,7 +107,7 @@ class Action:
             ActionType.IMAGE_CHECK: f"检查图片: {os.path.basename(self.params.get('image_path', ''))}",
             ActionType.ACTION_GROUP_REF: f"📁 动作组引用: {self.params.get('group_name', '未知')}",
         }
-        return name_prefix + delay_prefix + desc_map.get(self.action_type, "未知动作") + repeat_suffix
+        return name_prefix + delay_prefix + desc_map.get(self.action_type, "未知动作") + bg_suffix + repeat_suffix
     
     def execute(self, window_offset: Optional[Tuple[int, int]] = None, should_stop: Optional[Callable[[], bool]] = None, local_group_manager=None) -> bool:
         repeat = max(1, self.repeat_count)
@@ -194,7 +196,18 @@ class Action:
                     y = self.params.get('y', 0) + window_offset[1]
                 else:
                     x, y = self.params.get('x', 0), self.params.get('y', 0)
-                pyautogui.moveTo(x=x, y=y, duration=self.params.get('duration', 0.0))
+                
+                if self.background_mode and self.window_title:
+                    from utils.background_click import create_background_clicker
+                    clicker = create_background_clicker(window_title=self.window_title)
+                    if clicker:
+                        result = clicker.move(self.params.get('x', 0), self.params.get('y', 0), background=True)
+                        if not result.success:
+                            pyautogui.moveTo(x=x, y=y, duration=self.params.get('duration', 0.0))
+                    else:
+                        pyautogui.moveTo(x=x, y=y, duration=self.params.get('duration', 0.0))
+                else:
+                    pyautogui.moveTo(x=x, y=y, duration=self.params.get('duration', 0.0))
             
             elif self.action_type == ActionType.MOUSE_CLICK_RELATIVE:
                 if window_offset:
@@ -202,7 +215,19 @@ class Action:
                     y = self.params.get('y', 0) + window_offset[1]
                 else:
                     x, y = self.params.get('x', 0), self.params.get('y', 0)
-                pyautogui.click(x=x, y=y)
+                
+                if self.background_mode and self.window_title:
+                    from utils.background_click import create_background_clicker
+                    clicker = create_background_clicker(window_title=self.window_title)
+                    if clicker:
+                        button = self.params.get('button', 'left')
+                        result = clicker.click(self.params.get('x', 0), self.params.get('y', 0), button=button, background=True)
+                        if not result.success:
+                            pyautogui.click(x=x, y=y)
+                    else:
+                        pyautogui.click(x=x, y=y)
+                else:
+                    pyautogui.click(x=x, y=y)
             
             elif self.action_type == ActionType.IMAGE_CLICK:
                 image_path = self.params.get('image_path', '')
@@ -402,6 +427,7 @@ class Action:
             'delay_after': self.delay_after,
             'window_title': self.window_title,
             'use_relative_coords': self.use_relative_coords,
+            'background_mode': self.background_mode,
             'name': self.name,
             'condition': self.condition,
             'repeat_count': self.repeat_count
@@ -423,6 +449,7 @@ class Action:
             delay_after=data.get('delay_after', 0.0),
             window_title=data.get('window_title'),
             use_relative_coords=data.get('use_relative_coords', False),
+            background_mode=data.get('background_mode', False),
             name=data.get('name', ''),
             condition=data.get('condition', ''),
             repeat_count=data.get('repeat_count', 1)
@@ -503,11 +530,30 @@ class Action:
         
         elif self.action_type in [ActionType.MOUSE_MOVE_RELATIVE, ActionType.MOUSE_CLICK_RELATIVE]:
             x, y = self.params.get('x', 0), self.params.get('y', 0)
-            if self.action_type == ActionType.MOUSE_MOVE_RELATIVE:
-                duration = self.params.get('duration', 0.0)
-                code_lines.append(f"pyautogui.moveTo(x=window_x + {x}, y=window_y + {y}, duration={duration})")
+            
+            if self.background_mode and self.window_title:
+                escaped_title = self.window_title.replace("'", "\\'")
+                if self.action_type == ActionType.MOUSE_MOVE_RELATIVE:
+                    code_lines.append(f"from utils.background_click import create_background_clicker")
+                    code_lines.append(f"clicker = create_background_clicker(window_title='{escaped_title}')")
+                    code_lines.append(f"if clicker:")
+                    code_lines.append(f"    clicker.move({x}, {y}, background=True)")
+                    code_lines.append(f"else:")
+                    code_lines.append(f"    pyautogui.moveTo(x=window_x + {x}, y=window_y + {y})")
+                else:
+                    button = self.params.get('button', 'left')
+                    code_lines.append(f"from utils.background_click import create_background_clicker")
+                    code_lines.append(f"clicker = create_background_clicker(window_title='{escaped_title}')")
+                    code_lines.append(f"if clicker:")
+                    code_lines.append(f"    clicker.click({x}, {y}, button='{button}', background=True)")
+                    code_lines.append(f"else:")
+                    code_lines.append(f"    pyautogui.click(x=window_x + {x}, y=window_y + {y})")
             else:
-                code_lines.append(f"pyautogui.click(x=window_x + {x}, y=window_y + {y})")
+                if self.action_type == ActionType.MOUSE_MOVE_RELATIVE:
+                    duration = self.params.get('duration', 0.0)
+                    code_lines.append(f"pyautogui.moveTo(x=window_x + {x}, y=window_y + {y}, duration={duration})")
+                else:
+                    code_lines.append(f"pyautogui.click(x=window_x + {x}, y=window_y + {y})")
         
         elif self.action_type == ActionType.IMAGE_CLICK:
             image_path = self.params.get('image_path', '')
@@ -652,6 +698,7 @@ class ActionManager:
             'params': [
                 {'name': 'x', 'type': 'int', 'default': 0, 'description': '相对X坐标'},
                 {'name': 'y', 'type': 'int', 'default': 0, 'description': '相对Y坐标'},
+                {'name': 'button', 'type': 'str', 'default': 'left', 'description': '鼠标按钮(left/right/middle)'},
             ]
         },
         ActionType.MOUSE_MOVE_RELATIVE: {

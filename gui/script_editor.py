@@ -8,6 +8,7 @@ from PyQt5 import sip
 from typing import List, Optional, Dict
 from core.actions import Action as ScriptAction
 from core.action_group import ActionGroup, LocalActionGroupManager, GlobalActionGroupManager
+from gui.preview_overlay import PreviewOverlay
 import copy
 
 from qfluentwidgets import (
@@ -182,6 +183,7 @@ class ScriptTabContent(QWidget):
     execute_single = pyqtSignal(int)
     highlight_action = pyqtSignal(int)
     clear_highlight = pyqtSignal()
+    preview_state_changed = pyqtSignal(str, bool)  # (state, is_active)
     
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -225,6 +227,7 @@ class ScriptTabContent(QWidget):
         self._groups_scroll_area = ScrollArea()
         self._groups_scroll_area.setWidgetResizable(True)
         self._groups_scroll_area.setStyleSheet("QScrollArea{border: none; background: transparent;}")
+        self._groups_scroll_area.setVisible(False)
         
         self._groups_content_widget = QWidget()
         self._groups_content_widget.setStyleSheet("background: transparent;")
@@ -281,39 +284,54 @@ class ScriptTabContent(QWidget):
         self._down_btn.setVisible(key == 'actions')
     
     def _refresh_groups(self):
-        while self._groups_content_layout.count():
-            item = self._groups_content_layout.takeAt(0)
-            widget = item.widget()
-            if widget and widget != self._empty_groups_label:
-                widget.setParent(None)
-                widget.deleteLater()
+        try:
+            while self._groups_content_layout.count():
+                item = self._groups_content_layout.takeAt(0)
+                widget = item.widget()
+                if widget:
+                    widget.setParent(None)
+                    if widget != self._empty_groups_label:
+                        widget.deleteLater()
+        except Exception as e:
+            print(f"[动作组刷新错误] {e}")
         
-        local_groups = self._local_group_manager.get_all_groups()
-        local_names = {g.name for g in local_groups}
+        local_groups = []
+        global_groups = []
         
-        global_groups = self._global_group_manager.get_all_groups()
-        global_groups = [g for g in global_groups if g.name not in local_names]
+        try:
+            if self._local_group_manager:
+                local_groups = self._local_group_manager.get_all_groups()
+            local_names = {g.name for g in local_groups}
+        except Exception as e:
+            print(f"[本地动作组获取错误] {e}")
+            local_names = set()
+        
+        try:
+            if self._global_group_manager:
+                global_groups = self._global_group_manager.get_all_groups()
+                global_groups = [g for g in global_groups if g.name not in local_names]
+        except Exception as e:
+            print(f"[全局动作组获取错误] {e}")
         
         all_groups_with_flag = [(g, True) for g in local_groups] + [(g, False) for g in global_groups]
         
         has_groups = len(all_groups_with_flag) > 0
         
-        try:
-            if self._empty_groups_label and not sip.isdeleted(self._empty_groups_label):
-                self._empty_groups_label.setVisible(not has_groups)
-        except RuntimeError:
-            self._empty_groups_label = BodyLabel("暂无保存的动作组\n\n在脚本列表中右键选择动作，\n点击\"保存为动作组...\"即可创建")
-            self._empty_groups_label.setAlignment(Qt.AlignCenter)
-            self._empty_groups_label.setWordWrap(True)
+        if has_groups:
+            self._empty_groups_label.hide()
+        else:
             self._groups_content_layout.addWidget(self._empty_groups_label)
-            self._empty_groups_label.setVisible(not has_groups)
+            self._empty_groups_label.show()
         
         for group, is_local in all_groups_with_flag:
-            item_widget = ActionGroupItemWidget(group, is_local=is_local)
-            item_widget.insert_requested.connect(self._on_group_insert_requested)
-            item_widget.delete_requested.connect(self._on_group_delete_requested)
-            item_widget.edit_requested.connect(self._on_group_edit_requested)
-            self._groups_content_layout.addWidget(item_widget)
+            try:
+                item_widget = ActionGroupItemWidget(group, is_local=is_local)
+                item_widget.insert_requested.connect(self._on_group_insert_requested)
+                item_widget.delete_requested.connect(self._on_group_delete_requested)
+                item_widget.edit_requested.connect(self._on_group_edit_requested)
+                self._groups_content_layout.addWidget(item_widget)
+            except Exception as e:
+                print(f"[动作组项创建错误] {e}")
     
     def _on_group_insert_requested(self, name: str):
         from core.actions import ActionType
@@ -347,16 +365,22 @@ class ScriptTabContent(QWidget):
         box.cancelButton.setText('取消')
         
         if box.exec():
-            if not self._local_group_manager.delete_group(name):
-                self._global_group_manager.delete_group(name)
+            deleted = False
+            if self._local_group_manager:
+                deleted = self._local_group_manager.delete_group(name)
+            if not deleted:
+                GlobalActionGroupManager.get_instance().delete_group(name)
             self._refresh_groups()
     
     def _on_group_edit_requested(self, name: str):
-        group = self._local_group_manager.get_group(name)
-        is_local = True
+        group = None
+        is_local = False
+        if self._local_group_manager:
+            group = self._local_group_manager.get_group(name)
+            if group:
+                is_local = True
         if not group:
-            group = self._global_group_manager.get_group(name)
-            is_local = False
+            group = GlobalActionGroupManager.get_instance().get_group(name)
         
         if group:
             main_window = self._get_main_window()
@@ -382,7 +406,7 @@ class ScriptTabContent(QWidget):
                     if is_local:
                         self._local_group_manager.delete_group(group.name)
                     else:
-                        self._global_group_manager.delete_group(group.name)
+                        GlobalActionGroupManager.get_instance().delete_group(group.name)
                 
                 group.name = new_name
                 group.description = new_description
@@ -390,7 +414,7 @@ class ScriptTabContent(QWidget):
                 if is_local:
                     self._local_group_manager.save_group(group)
                 else:
-                    self._global_group_manager.save_group(group)
+                    GlobalActionGroupManager.get_instance().save_group(group)
                 self._refresh_groups()
                 
                 InfoBar.success(
@@ -523,9 +547,12 @@ class ScriptTabContent(QWidget):
         
         selected_rows = sorted([self._action_list.row(item) for item in self._action_list.selectedItems()])
         
-        local_groups = self._local_group_manager.get_all_groups()
-        local_names = {g.name for g in local_groups}
-        global_groups = self._global_group_manager.get_all_groups()
+        local_groups = []
+        local_names = set()
+        if self._local_group_manager:
+            local_groups = self._local_group_manager.get_all_groups()
+            local_names = {g.name for g in local_groups}
+        global_groups = GlobalActionGroupManager.get_instance().get_all_groups()
         global_groups = [g for g in global_groups if g.name not in local_names]
         unique_groups = local_groups + global_groups
         
@@ -552,6 +579,18 @@ class ScriptTabContent(QWidget):
             from core.actions import ActionType
             if action and action.action_type == ActionType.ACTION_GROUP_REF:
                 menu.addAction(Action(FluentIcon.FOLDER, "解压动作组引用", triggered=lambda: self._expand_action_group(index)))
+            
+            if action and action.action_type in [ActionType.MOUSE_CLICK_RELATIVE, ActionType.MOUSE_MOVE_RELATIVE]:
+                bg_text = "切换为前台模式" if getattr(action, 'background_mode', False) else "切换为后台模式"
+                menu.addAction(Action(FluentIcon.SETTING, bg_text, triggered=lambda: self._toggle_background_mode(index)))
+            
+            if selected_rows:
+                from core.actions import ActionType
+                bg_actions = [i for i in selected_rows if i < len(self._actions) and self._actions[i].action_type in [ActionType.MOUSE_CLICK_RELATIVE, ActionType.MOUSE_MOVE_RELATIVE]]
+                if bg_actions:
+                    menu.addSeparator()
+                    menu.addAction(Action(FluentIcon.SETTING, f"批量转后台模式 ({len(bg_actions)} 个)", triggered=lambda: self._batch_set_background_mode(selected_rows, True)))
+                    menu.addAction(Action(FluentIcon.SETTING, f"批量转前台模式 ({len(bg_actions)} 个)", triggered=lambda: self._batch_set_background_mode(selected_rows, False)))
             
             if selected_rows:
                 menu.addAction(Action(FluentIcon.SAVE, "保存为动作组...", triggered=lambda: self._save_as_group(selected_rows)))
@@ -586,6 +625,39 @@ class ScriptTabContent(QWidget):
         self._refresh_list()
         self.actions_changed.emit()
     
+    def _toggle_background_mode(self, index: int):
+        from core.actions import ActionType
+        
+        if not (0 <= index < len(self._actions)):
+            return
+        
+        action = self._actions[index]
+        if action.action_type not in [ActionType.MOUSE_CLICK_RELATIVE, ActionType.MOUSE_MOVE_RELATIVE]:
+            return
+        
+        current_mode = getattr(action, 'background_mode', False)
+        action.background_mode = not current_mode
+        action.description = action._generate_description()
+        
+        self._refresh_list()
+        self.actions_changed.emit()
+    
+    def _batch_set_background_mode(self, indices: List[int], background: bool):
+        from core.actions import ActionType
+        
+        changed = 0
+        for i in indices:
+            if 0 <= i < len(self._actions):
+                action = self._actions[i]
+                if action.action_type in [ActionType.MOUSE_CLICK_RELATIVE, ActionType.MOUSE_MOVE_RELATIVE]:
+                    action.background_mode = background
+                    action.description = action._generate_description()
+                    changed += 1
+        
+        if changed > 0:
+            self._refresh_list()
+            self.actions_changed.emit()
+    
     def _expand_action_group(self, index: int):
         from core.actions import ActionType
         
@@ -600,9 +672,11 @@ class ScriptTabContent(QWidget):
         if not group_name:
             return
         
-        group = self._local_group_manager.get_group(group_name)
+        group = None
+        if self._local_group_manager:
+            group = self._local_group_manager.get_group(group_name)
         if not group:
-            group = self._global_group_manager.get_group(group_name)
+            group = GlobalActionGroupManager.get_instance().get_group(group_name)
         if not group:
             main_window = self._get_main_window()
             MessageBox('错误', f'动作组 "{group_name}" 不存在', main_window if main_window else self).exec()
@@ -657,19 +731,138 @@ class ScriptTabContent(QWidget):
     def _preview_all(self):
         if not self._actions:
             return
+        
         self._preview_index = 0
+        self._preview_paused = False
+        self._preview_overlay = PreviewOverlay.get_instance(duration=1200)
         self._preview_timer = QTimer(self)
         self._preview_timer.timeout.connect(self._preview_next_action)
-        self._preview_timer.start(1500)
+        self._preview_timer.start(2500)
         self._highlight_action(0)
+        self._show_action_preview(0)
+        
+        self._debug_btn.setVisible(False)
+        self.preview_state_changed.emit("playing", True)
+    
+    def _toggle_pause_preview(self):
+        if not hasattr(self, '_preview_timer') or not self._preview_timer:
+            return
+        
+        if self._preview_timer.isActive():
+            self._preview_timer.stop()
+            if hasattr(self, '_preview_overlay') and self._preview_overlay:
+                self._preview_overlay.stop_preview()
+            self._preview_paused = True
+            self.preview_state_changed.emit("paused", True)
+        else:
+            self._preview_timer.start(2500)
+            self._preview_paused = False
+            self._show_action_preview(self._preview_index)
+            self.preview_state_changed.emit("playing", True)
+    
+    def _stop_preview(self):
+        if hasattr(self, '_preview_timer') and self._preview_timer:
+            self._preview_timer.stop()
+            self._preview_timer = None
+        self._clear_all_highlights()
+        if hasattr(self, '_preview_overlay') and self._preview_overlay:
+            self._preview_overlay.stop_preview()
+        self._preview_paused = False
+        
+        self._debug_btn.setVisible(True)
+        self.preview_state_changed.emit("stopped", False)
+    
+    def is_preview_active(self) -> bool:
+        return hasattr(self, '_preview_timer') and self._preview_timer is not None and self._preview_timer != False
+    
+    def is_preview_playing(self) -> bool:
+        return self.is_preview_active() and self._preview_timer.isActive()
     
     def _preview_next_action(self):
         self._preview_index += 1
         if self._preview_index >= len(self._actions):
-            self._preview_timer.stop()
-            self._clear_all_highlights()
+            self._stop_preview()
             return
         self._highlight_action(self._preview_index)
+        self._show_action_preview(self._preview_index)
+    
+    def _show_action_preview(self, index: int):
+        if not (0 <= index < len(self._actions)):
+            return
+        
+        action = self._actions[index]
+        from core.actions import ActionType
+        
+        window_offset = None
+        main_window = self._get_main_window()
+        if main_window and hasattr(main_window, '_window_selector'):
+            window_offset = main_window._window_selector.get_window_offset()
+        
+        if action.action_type in [ActionType.MOUSE_CLICK, ActionType.MOUSE_CLICK_RELATIVE]:
+            x = action.params.get('x', 0)
+            y = action.params.get('y', 0)
+            button = action.params.get('button', 'left')
+            label = f"{button}键点击"
+            if action.action_type == ActionType.MOUSE_CLICK_RELATIVE and window_offset:
+                x = window_offset[0] + x
+                y = window_offset[1] + y
+            self._preview_overlay.show_click_position(x, y, label)
+        
+        elif action.action_type in [ActionType.MOUSE_MOVE, ActionType.MOUSE_MOVE_RELATIVE]:
+            x = action.params.get('x', 0)
+            y = action.params.get('y', 0)
+            if action.action_type == ActionType.MOUSE_MOVE_RELATIVE and window_offset:
+                x = window_offset[0] + x
+                y = window_offset[1] + y
+            self._preview_overlay.show_click_position(x, y, "移动")
+        
+        elif action.action_type == ActionType.MOUSE_DRAG:
+            start_x = action.params.get('start_x', 0)
+            start_y = action.params.get('start_y', 0)
+            end_x = action.params.get('end_x', 0)
+            end_y = action.params.get('end_y', 0)
+            if window_offset:
+                start_x = window_offset[0] + start_x
+                start_y = window_offset[1] + start_y
+                end_x = window_offset[0] + end_x
+                end_y = window_offset[1] + end_y
+            self._preview_overlay.show_drag_line(start_x, start_y, end_x, end_y)
+        
+        elif action.action_type == ActionType.MOUSE_SCROLL:
+            x = action.params.get('x', 0)
+            y = action.params.get('y', 0)
+            clicks = action.params.get('clicks', 0)
+            if window_offset:
+                x = window_offset[0] + x
+                y = window_offset[1] + y
+            self._preview_overlay.show_scroll_position(x, y, clicks)
+        
+        elif action.action_type == ActionType.KEY_TYPE:
+            text = action.params.get('text', '')
+            self._preview_overlay.show_text_preview(text, "输入文本")
+        
+        elif action.action_type == ActionType.HOTKEY:
+            keys = action.params.get('keys', [])
+            self._preview_overlay.show_hotkey_preview(keys)
+        
+        elif action.action_type == ActionType.IMAGE_CLICK:
+            image_path = action.params.get('image_path', '')
+            confidence = action.params.get('confidence', 0.9)
+            self._preview_overlay.show_image_match(image_path, confidence)
+        
+        elif action.action_type == ActionType.ACTION_GROUP_REF:
+            group_name = action.params.get('group_name', '')
+            if self._local_group_manager:
+                group = self._local_group_manager.get_group(group_name)
+                if group:
+                    self._preview_overlay.show_action_group_preview(group.name, group.get_action_count(), group.description)
+                    return
+            from core.action_group import GlobalActionGroupManager
+            global_mgr = GlobalActionGroupManager.get_instance()
+            if global_mgr:
+                group = global_mgr.get_group(group_name)
+                if group:
+                    self._preview_overlay.show_action_group_preview(group.name, group.get_action_count(), group.description)
     
     def _highlight_action(self, index: int):
         for i in range(self._action_list.count()):
@@ -706,12 +899,12 @@ class ScriptTabContent(QWidget):
             
             actions = [copy.deepcopy(self._actions[row]) for row in selected_rows if 0 <= row < len(self._actions)]
             
-            group = self._local_group_manager.create_group_from_actions(name, description, actions)
-            
-            if self._local_group_manager.save_group(group):
-                self._refresh_groups()
-            else:
-                MessageBox('保存失败', '无法保存动作组', self).exec()
+            if self._local_group_manager:
+                group = self._local_group_manager.create_group_from_actions(name, description, actions)
+                if self._local_group_manager.save_group(group):
+                    self._refresh_groups()
+                else:
+                    MessageBox('保存失败', '无法保存动作组', self).exec()
     
     def get_selected_index(self) -> int:
         return self._selected_index
@@ -730,6 +923,7 @@ class ScriptEditor(CardWidget):
     tab_close_requested = pyqtSignal(str, str)
     highlight_action = pyqtSignal(int)
     clear_highlight = pyqtSignal()
+    preview_state_changed = pyqtSignal(str, bool)
     
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -737,7 +931,12 @@ class ScriptEditor(CardWidget):
         self._tab_counter: int = 0
         self._external_modified_check = None
         self._setup_ui()
-        self.add_new_tab()
+        self._initialized = False
+    
+    def initialize(self):
+        if not self._initialized:
+            self.add_new_tab()
+            self._initialized = True
     
     def set_modified_check_callback(self, callback):
         self._external_modified_check = callback
@@ -791,6 +990,7 @@ class ScriptEditor(CardWidget):
             tab_content.execute_single.connect(self.execute_single.emit)
             tab_content.highlight_action.connect(self.highlight_action.emit)
             tab_content.clear_highlight.connect(self.clear_highlight.emit)
+            tab_content.preview_state_changed.connect(self.preview_state_changed.emit)
             
             self._tabs[route_key] = tab_content
             self._stacked_widget.addWidget(tab_content)
@@ -826,20 +1026,26 @@ class ScriptEditor(CardWidget):
                 self._close_tab_by_route_key(route_key, index)
     
     def _close_tab_by_route_key(self, route_key: str, index: int):
-        if route_key in self._tabs:
-            tab_content = self._tabs[route_key]
-            del self._tabs[route_key]
-            self._stacked_widget.removeWidget(tab_content)
-            tab_content.deleteLater()
-            self._tab_bar.removeTab(index)
-            self._update_action_count()
+        if route_key not in self._tabs:
+            return
+        
+        tab_content = self._tabs[route_key]
+        del self._tabs[route_key]
+        self._stacked_widget.removeWidget(tab_content)
+        tab_content.deleteLater()
+        self._tab_bar.removeTab(index)
+        
+        self._update_action_count()
     
     def _on_tab_changed(self, index: int):
         route_key = self._get_route_key_by_index(index)
         if route_key and route_key in self._tabs:
-            self._stacked_widget.setCurrentWidget(self._tabs[route_key])
+            tab_content = self._tabs[route_key]
+            self._stacked_widget.setCurrentWidget(tab_content)
             self._update_action_count()
             self.tab_changed.emit(route_key)
+            if hasattr(tab_content, '_refresh_groups'):
+                tab_content._refresh_groups()
     
     def _get_route_key_by_index(self, index: int) -> Optional[str]:
         tab_item = self._tab_bar.tabItem(index)

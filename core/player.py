@@ -30,6 +30,7 @@ class Player:
         self._pause_event = threading.Event()
         self._stop_flag = False
         self._window_offset: Optional[Tuple[int, int]] = None
+        self._window_title: str = ""
         self._start_time: float = 0
         
         self._callbacks = {
@@ -93,6 +94,9 @@ class Player:
     def set_window_offset(self, offset: Optional[Tuple[int, int]]):
         self._window_offset = offset
     
+    def set_window_title(self, title: str):
+        self._window_title = title
+    
     def play(self):
         if self.state == PlayerState.PLAYING:
             return
@@ -106,6 +110,8 @@ class Player:
             self._emit('on_state_changed', self.state)
             return
         
+        self._ensure_target_window_exists()
+        
         self.state = PlayerState.PLAYING
         self.current_index = 0
         self.current_repeat = 0
@@ -117,6 +123,39 @@ class Player:
         self._thread.start()
         
         self._emit('on_state_changed', self.state)
+    
+    def _ensure_target_window_exists(self):
+        if not self._window_title:
+            return
+        
+        try:
+            import win32gui
+            
+            from core.command_manager import CommandManager
+            cmd_manager = CommandManager.get_instance()
+            
+            commands = cmd_manager.get_all_commands()
+            
+            for cmd in commands:
+                if cmd.window_title_pattern and cmd.window_title_pattern.lower() in self._window_title.lower():
+                    windows_found = []
+                    
+                    def enum_callback(hwnd, _):
+                        if win32gui.IsWindowVisible(hwnd):
+                            title = win32gui.GetWindowText(hwnd)
+                            if cmd.window_title_pattern.lower() in title.lower():
+                                windows_found.append(hwnd)
+                        return True
+                    
+                    win32gui.EnumWindows(enum_callback, None)
+                    
+                    if not windows_found:
+                        success, message, already_running = cmd_manager.check_and_launch(cmd.id)
+                        if success and not already_running:
+                            time.sleep(2)
+                    break
+        except Exception:
+            pass
     
     def pause(self):
         if self.state == PlayerState.PLAYING:

@@ -11,7 +11,7 @@ from core.actions import Action, ActionType, ActionManager, VariableManager
 from qfluentwidgets import (
     StrongBodyLabel, BodyLabel, PushButton,
     SpinBox, DoubleSpinBox, LineEdit, ComboBox,
-    ScrollArea, MessageBox, CardWidget
+    ScrollArea, MessageBox, CardWidget, CheckBox
 )
 
 from .widgets import CoordinateWidget, KeySequenceDialog, CaptureWidget, DragCoordinateWidget
@@ -158,7 +158,13 @@ class PropertyPanel(CardWidget):
         params_label = StrongBodyLabel("参数设置")
         self._content_layout.addWidget(params_label)
         
+        if self._current_action.action_type in [ActionType.MOUSE_CLICK_RELATIVE, ActionType.MOUSE_MOVE_RELATIVE]:
+            self._add_window_mode_section()
+        
         processed_params = set()
+        
+        if self._current_action.action_type == ActionType.MOUSE_CLICK_RELATIVE:
+            processed_params.add('button')
         
         for param_def in definition.get('params', []):
             param_name = param_def['name']
@@ -329,6 +335,59 @@ class PropertyPanel(CardWidget):
             data = ""
         if self._current_action:
             self._current_action.condition = data if data else ""
+    
+    def _add_window_mode_section(self):
+        mode_label = StrongBodyLabel("窗口模式")
+        self._content_layout.addWidget(mode_label)
+        
+        bg_checkbox = CheckBox("后台模式")
+        bg_checkbox.setChecked(getattr(self._current_action, 'background_mode', False))
+        bg_checkbox.setMinimumHeight(36)
+        bg_checkbox.stateChanged.connect(self._on_background_mode_changed)
+        self._param_widgets['_background_mode'] = bg_checkbox
+        self._content_layout.addWidget(bg_checkbox)
+        
+        info_label = BodyLabel("💡 后台模式: 不激活窗口即可操作")
+        info_label.setStyleSheet("color: #666; font-size: 11px;")
+        self._content_layout.addWidget(info_label)
+        
+        if self._current_action.action_type == ActionType.MOUSE_CLICK_RELATIVE:
+            button_label = BodyLabel("鼠标按钮")
+            self._content_layout.addWidget(button_label)
+            
+            button_combo = ComboBox()
+            button_combo.addItem("左键", "left")
+            button_combo.addItem("右键", "right")
+            button_combo.addItem("中键", "middle")
+            button_combo.setMinimumHeight(36)
+            
+            current_button = self._current_action.params.get('button', 'left')
+            if current_button == 'right':
+                button_combo.setCurrentIndex(1)
+            elif current_button == 'middle':
+                button_combo.setCurrentIndex(2)
+            else:
+                button_combo.setCurrentIndex(0)
+            
+            button_combo.currentIndexChanged.connect(self._on_button_changed)
+            self._param_widgets['_button'] = button_combo
+            self._content_layout.addWidget(button_combo)
+        
+        self._content_layout.addSpacing(8)
+    
+    def _on_background_mode_changed(self, state):
+        if self._current_action:
+            self._current_action.background_mode = (state == Qt.Checked)
+            self._current_action.description = self._current_action._generate_description()
+            self.action_updated.emit(self._current_action)
+    
+    def _on_button_changed(self, index):
+        if self._current_action:
+            buttons = ['left', 'right', 'middle']
+            if 0 <= index < len(buttons):
+                self._current_action.params['button'] = buttons[index]
+                self._current_action.description = self._current_action._generate_description()
+                self.action_updated.emit(self._current_action)
     
     def _add_param_widget(self, param_name: str, param_type: str, param_desc: str, current_value: Any):
         param_label = BodyLabel(f"{param_desc}")

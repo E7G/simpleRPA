@@ -32,6 +32,7 @@ from .property_panel import PropertyPanel
 from .recorder_panel import RecorderPanel
 from .widgets import WindowSelector
 from .command_panel import CommandManagerWidget
+from .dashboard_page import DashboardPage
 
 
 APP_VERSION = "0.1.0"
@@ -64,6 +65,7 @@ class MainWindow(FluentWindow):
         
         self._mouse_pos_timer = QTimer(self)
         self._mouse_pos_timer.timeout.connect(self._update_mouse_position)
+        self._mouse_pos_timer.timeout.connect(self._refresh_dashboard_windows)
         self._mouse_pos_timer.start(100)
         
         self._update_progress_signal.connect(self._on_player_progress)
@@ -88,10 +90,16 @@ class MainWindow(FluentWindow):
         self.setWindowTitle("SimpleRPA - RPA自动化工具")
         self.setMinimumSize(1280, 850)
         
+        self.dashboardInterface = DashboardPage()
+        self.dashboardInterface.setObjectName('dashboardInterface')
+        self.addSubInterface(
+            self.dashboardInterface, FluentIcon.PLAY, '执行面板'
+        )
+        
         self.homeInterface = QWidget()
         self.homeInterface.setObjectName('homeInterface')
         self.addSubInterface(
-            self.homeInterface, FluentIcon.HOME, '主页'
+            self.homeInterface, FluentIcon.EDIT, '编辑器'
         )
         
         self.commandInterface = QWidget()
@@ -526,6 +534,13 @@ class MainWindow(FluentWindow):
         except Exception:
             pass
     
+    def _refresh_dashboard_windows(self):
+        try:
+            if hasattr(self, 'dashboardInterface') and self.dashboardInterface.isVisible():
+                self.dashboardInterface.refresh_windows()
+        except Exception:
+            pass
+    
     def _get_current_tab_key(self) -> str:
         return self._script_editor.get_current_route_key()
     
@@ -572,13 +587,23 @@ class MainWindow(FluentWindow):
         self._status_label.setText("新建任务")
     
     def _open_script(self):
+        current_widget = self.stackedWidget.currentWidget()
+        if current_widget == self.dashboardInterface:
+            if hasattr(self.dashboardInterface, 'open_list_dialog'):
+                self.dashboardInterface.open_list_dialog()
+                return
+        
         filepath, _ = QFileDialog.getOpenFileName(
             self, "打开脚本", "",
-            "RPA脚本 (*.rpa.json);;Python脚本 (*.py);;所有文件 (*)"
+            "RPA脚本 (*.rpa.json);;脚本列表 (*.scripts.json);;Python脚本 (*.py);;所有文件 (*)"
         )
         
         if filepath:
-            self._load_script_file(filepath)
+            if filepath.endswith('.scripts.json'):
+                if hasattr(self.dashboardInterface, '_load_list_from_file'):
+                    self.dashboardInterface._load_list_from_file(filepath)
+            else:
+                self._load_script_file(filepath)
     
     def _load_script_file(self, filepath: str):
         if filepath.endswith('.json') or filepath.endswith('.rpa.json'):
@@ -652,6 +677,12 @@ class MainWindow(FluentWindow):
             MessageBox('提示', '目前只支持打开JSON格式的脚本文件', self).exec()
     
     def _save_script(self) -> bool:
+        current_widget = self.stackedWidget.currentWidget()
+        if current_widget == self.dashboardInterface:
+            if hasattr(self.dashboardInterface, 'save_list_dialog'):
+                self.dashboardInterface.save_list_dialog()
+                return True
+        
         current_file = self._get_current_tab_file()
         if current_file:
             return self._save_script_to_file(current_file)
@@ -659,6 +690,17 @@ class MainWindow(FluentWindow):
             return self._save_script_as()
     
     def _save_script_as(self) -> bool:
+        current_widget = self.stackedWidget.currentWidget()
+        if current_widget == self.dashboardInterface:
+            if hasattr(self.dashboardInterface, '_save_list_to_file'):
+                filepath, _ = QFileDialog.getSaveFileName(
+                    self, "保存脚本列表", "", "脚本列表 (*.scripts.json)"
+                )
+                if filepath:
+                    self.dashboardInterface._save_list_to_file(filepath)
+                    return True
+            return False
+        
         filepath, _ = QFileDialog.getSaveFileName(
             self, "保存脚本", "",
             "RPA脚本 (*.rpa.json);;所有文件 (*)"
@@ -701,6 +743,12 @@ class MainWindow(FluentWindow):
             return False
     
     def _export_python(self):
+        current_widget = self.stackedWidget.currentWidget()
+        if current_widget == self.dashboardInterface:
+            if hasattr(self.dashboardInterface, 'export_python'):
+                self.dashboardInterface.export_python()
+                return
+        
         filepath, _ = QFileDialog.getSaveFileName(
             self, "导出Python脚本", "",
             "Python文件 (*.py);;所有文件 (*)"
@@ -780,8 +828,10 @@ class MainWindow(FluentWindow):
         for action in actions:
             if action.action_type in [ActionType.MOUSE_CLICK_RELATIVE, ActionType.MOUSE_MOVE_RELATIVE]:
                 action.use_relative_coords = True
-                if window_title:
-                    action.window_title = window_title
+            if action.background_mode and window_title:
+                action.window_title = window_title
+            if action.action_type in [ActionType.ACTION_GROUP_REF, ActionType.IMAGE_CLICK, ActionType.IMAGE_WAIT_CLICK, ActionType.IMAGE_CHECK] and window_title:
+                action.window_title = window_title
         
         self._run_btn.setEnabled(False)
         self._pause_btn.setEnabled(True)
@@ -836,6 +886,12 @@ class MainWindow(FluentWindow):
         if player:
             player.stop()
             self._status_label.setText("已停止")
+            self._script_editor.clear_all_running()
+            self._run_btn.setEnabled(True)
+            self._pause_btn.setEnabled(False)
+            self._stop_btn.setEnabled(False)
+            self._pause_btn.setText("暂停")
+            self._progress_bar.setVisible(False)
     
     def _on_action_added(self, action: Action):
         self._script_editor.add_action(action)

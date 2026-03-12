@@ -98,6 +98,19 @@ class ActionGroupItemWidget(CardWidget):
         self._is_local = is_local
         self._expanded = False
         self._setup_ui()
+        self.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.customContextMenuRequested.connect(self._show_context_menu)
+    
+    def _show_context_menu(self, pos):
+        from qfluentwidgets import RoundMenu, Action
+        
+        menu = RoundMenu(parent=self)
+        menu.addAction(Action(FluentIcon.ADD, "插入到脚本", triggered=lambda: self.insert_requested.emit(self._group.name)))
+        menu.addAction(Action(FluentIcon.EDIT, "编辑动作组", triggered=lambda: self.edit_requested.emit(self._group.name)))
+        menu.addSeparator()
+        menu.addAction(Action(FluentIcon.DELETE, "删除动作组", triggered=lambda: self.delete_requested.emit(self._group.name)))
+        
+        menu.exec_(self.mapToGlobal(pos))
     
     def _setup_ui(self):
         layout = QVBoxLayout(self)
@@ -282,6 +295,9 @@ class ScriptTabContent(QWidget):
         self._clear_btn.setVisible(key == 'actions')
         self._up_btn.setVisible(key == 'actions')
         self._down_btn.setVisible(key == 'actions')
+        
+        if key == 'groups':
+            self._refresh_groups()
     
     def _refresh_groups(self):
         try:

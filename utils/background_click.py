@@ -255,12 +255,14 @@ class BackgroundClicker:
                 return BackgroundClickResult(False, f"前台滚动失败: {str(e)}", False)
     
     @staticmethod
-    def _make_lparam(x: int, y: int) -> int:
+    def _make_lparam(x: int, y: int):
         """创建 lParam 参数"""
-        return (y << 16) | (x & 0xFFFF)
+        return wintypes.LPARAM((y << 16) | (x & 0xFFFF))
     
     def __repr__(self):
-        return f"BackgroundClicker(hwnd={self._main_hwnd:08X if self._main_hwnd else 0}, render={self._render_hwnd:08X if self._render_hwnd else 0}, title='{self._title}')"
+        hwnd_hex = self._main_hwnd if self._main_hwnd else 0
+        render_hex = self._render_hwnd if self._render_hwnd else 0
+        return f"BackgroundClicker(hwnd={hwnd_hex:08X}, render={render_hex:08X}, title='{self._title}')"
 
 
 def create_background_clicker(window_title: str = None, hwnd: int = None) -> Optional[BackgroundClicker]:

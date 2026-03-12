@@ -237,6 +237,15 @@ class WindowSelector(QWidget):
         layout.addWidget(self._pick_btn)
     
     def refresh_windows(self):
+        current_hwnd = self._selected_window
+        current_title = ""
+        if current_hwnd and self._win32_available:
+            try:
+                import win32gui
+                current_title = win32gui.GetWindowText(current_hwnd)
+            except:
+                pass
+        
         self._window_combo.clear()
         self._window_combo.addItem("-- 选择窗口 --")
         
@@ -257,9 +266,17 @@ class WindowSelector(QWidget):
             
             win32gui.EnumWindows(enum_callback, None)
             
+            found_index = -1
             for hwnd, title in windows:
                 self._window_combo.addItem(title)
                 self._window_combo.setItemData(self._window_combo.count() - 1, hwnd)
+                if hwnd == current_hwnd:
+                    found_index = self._window_combo.count() - 1
+            
+            if found_index > 0:
+                self._window_combo.setCurrentIndex(found_index)
+            else:
+                self._selected_window = None
         except Exception as e:
             print(f"Refresh windows failed: {e}")
     
@@ -473,6 +490,20 @@ class WindowSelector(QWidget):
             self._window_combo.setCurrentIndex(0)
         
         return is_valid, message
+    
+    def set_window_title(self, title: str):
+        if not title:
+            return
+        
+        for i in range(self._window_combo.count()):
+            item_title = self._window_combo.itemText(i)
+            if title.lower() in item_title.lower():
+                self._window_combo.setCurrentIndex(i)
+                self._selected_window = self._window_combo.itemData(i)
+                return
+        
+        self._window_combo.insertItem(1, f"[未找到] {title}")
+        self._window_combo.setCurrentIndex(1)
 
 
 class WindowPickerDialog(QDialog):

@@ -7,12 +7,12 @@ import os
 
 class PreviewOverlay(QWidget):
     _instance = None
+    _initialized = False
     
     @classmethod
     def get_instance(cls, duration: int = 2000):
         if cls._instance is None:
-            cls._instance = PreviewOverlay.__new__(cls)
-            cls._instance._init_widget(duration)
+            cls._instance = PreviewOverlay(duration)
         else:
             cls._instance._duration = duration
             cls._instance._preview_type = None
@@ -21,8 +21,12 @@ class PreviewOverlay(QWidget):
             cls._instance._blink_count = 0
         return cls._instance
     
-    def _init_widget(self, duration: int = 2000):
+    def __init__(self, duration: int = 2000):
+        if PreviewOverlay._initialized:
+            return
+        
         super().__init__()
+        
         self._duration = duration
         self._preview_type = None
         self._preview_data = {}
@@ -42,9 +46,7 @@ class PreviewOverlay(QWidget):
         self._blink_count = 0
         
         self._setup_geometry()
-    
-    def __init__(self, duration: int = 2000):
-        pass
+        PreviewOverlay._initialized = True
     
     def _setup_geometry(self):
         screens = QGuiApplication.screens()
@@ -279,10 +281,27 @@ class PreviewOverlay(QWidget):
         
         try:
             import pyautogui
+            import cv2
+            import numpy as np
+            
             try:
                 location = pyautogui.locateOnScreen(image_path, confidence=confidence)
             except pyautogui.ImageNotFoundException:
                 location = None
+            
+            actual_confidence = confidence
+            if location:
+                try:
+                    screenshot = pyautogui.screenshot(region=(location.left - 5, location.top - 5, 
+                                                              location.width + 10, location.height + 10))
+                    screenshot_cv = cv2.cvtColor(np.array(screenshot), cv2.COLOR_RGB2BGR)
+                    template = cv2.imread(image_path)
+                    if template is not None:
+                        result = cv2.matchTemplate(screenshot_cv, template, cv2.TM_CCOEFF_NORMED)
+                        _, max_val, _, _ = cv2.minMaxLoc(result)
+                        actual_confidence = round(max_val, 3)
+                except:
+                    pass
             
             if location:
                 color = QColor(50, 200, 50, 200) if self._blink_state else QColor(100, 230, 100, 150)
@@ -311,14 +330,14 @@ class PreviewOverlay(QWidget):
                 line1 = f"✓ 匹配成功"
                 line2 = f"位置: ({location.left}, {location.top})"
                 line3 = f"尺寸: {location.width}x{location.height}"
-                line4 = f"置信度: {confidence}"
+                line4 = f"置信度: {actual_confidence} (阈值: {confidence})"
                 
                 info_x = location.left
                 info_y = location.top - 80
                 if info_y < 10:
                     info_y = location.top + location.height + 10
                 
-                info_width = 160
+                info_width = 180
                 info_height = 75
                 info_rect = QRect(info_x, info_y, info_width, info_height)
                 painter.fillRect(info_rect, QColor(50, 200, 50, 230))
@@ -334,6 +353,17 @@ class PreviewOverlay(QWidget):
                 painter.drawLine(center_x - 10, center_y, center_x + 10, center_y)
                 painter.drawLine(center_x, center_y - 10, center_x, center_y + 10)
             else:
+                try:
+                    screenshot = pyautogui.screenshot()
+                    screenshot_cv = cv2.cvtColor(np.array(screenshot), cv2.COLOR_RGB2BGR)
+                    template = cv2.imread(image_path)
+                    if template is not None:
+                        result = cv2.matchTemplate(screenshot_cv, template, cv2.TM_CCOEFF_NORMED)
+                        _, max_val, _, _ = cv2.minMaxLoc(result)
+                        actual_confidence = round(max_val, 3)
+                except:
+                    actual_confidence = confidence
+                
                 font = QFont()
                 font.setPointSize(12)
                 font.setBold(True)
@@ -342,8 +372,8 @@ class PreviewOverlay(QWidget):
                 
                 screen_center = self.rect().center()
                 
-                info_width = 200
-                info_height = 60
+                info_width = 240
+                info_height = 80
                 info_rect = QRect(
                     screen_center.x() - info_width // 2,
                     screen_center.y() - info_height // 2,
@@ -352,9 +382,10 @@ class PreviewOverlay(QWidget):
                 )
                 painter.fillRect(info_rect, QColor(0, 0, 0, 220))
                 
-                painter.drawText(info_rect.adjusted(10, 10, -10, -30), Qt.AlignCenter, "✗ 未找到匹配图片")
+                painter.drawText(info_rect.adjusted(10, 10, -10, -50), Qt.AlignCenter, "✗ 未找到匹配图片")
                 painter.setFont(QFont("", 10))
-                painter.drawText(info_rect.adjusted(10, 35, -10, -10), Qt.AlignCenter, f"置信度: {confidence}")
+                painter.drawText(info_rect.adjusted(10, 35, -10, -35), Qt.AlignCenter, f"最高匹配: {actual_confidence}")
+                painter.drawText(info_rect.adjusted(10, 55, -10, -15), Qt.AlignCenter, f"阈值: {confidence}")
         except Exception as e:
             font = QFont()
             font.setPointSize(12)

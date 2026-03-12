@@ -121,17 +121,52 @@ class Action:
                 return False
         return True
     
-    def _execute_once(self, window_offset: Optional[Tuple[int, int]] = None, should_stop: Optional[Callable[[], bool]] = None, local_group_manager=None) -> bool:
+    def _activate_window_for_image(self):
+        if not self.window_title:
+            return
         try:
-            time.sleep(self.delay_before)
+            import win32gui
+            import win32con
             
-            if window_offset and self.use_relative_coords:
-                x = self.params.get('x', 0) + window_offset[0]
-                y = self.params.get('y', 0) + window_offset[1]
-            else:
-                x = self.params.get('x')
-                y = self.params.get('y')
+            def enum_callback(hwnd, result):
+                if win32gui.IsWindowVisible(hwnd):
+                    title = win32gui.GetWindowText(hwnd)
+                    if self.window_title.lower() in title.lower():
+                        result.append(hwnd)
+                return True
             
+            windows = []
+            win32gui.EnumWindows(enum_callback, windows)
+            
+            if windows:
+                hwnd = windows[0]
+                win32gui.ShowWindow(hwnd, win32con.SW_RESTORE)
+                win32gui.SetForegroundWindow(hwnd)
+                time.sleep(0.1)
+        except Exception as e:
+            print(f"[激活窗口失败] {e}")
+    
+    def _execute_once(self, window_offset: Optional[Tuple[int, int]] = None, should_stop: Optional[Callable[[], bool]] = None, local_group_manager=None) -> bool:
+        if self.delay_before > 0:
+            end_time = time.time() + self.delay_before
+            while time.time() < end_time:
+                if should_stop and should_stop():
+                    return False
+                sleep_time = min(0.05, end_time - time.time())
+                if sleep_time > 0:
+                    time.sleep(sleep_time)
+        
+        if should_stop and should_stop():
+            return False
+        
+        if window_offset and self.use_relative_coords:
+            x = self.params.get('x', 0) + window_offset[0]
+            y = self.params.get('y', 0) + window_offset[1]
+        else:
+            x = self.params.get('x')
+            y = self.params.get('y')
+        
+        try:
             if self.action_type == ActionType.MOUSE_CLICK:
                 button = self.params.get('button', 'left')
                 clicks = self.params.get('clicks', 1)
@@ -236,17 +271,38 @@ class Action:
                     raise Exception("未设置图片路径，请先选择或截取图片")
                 if not os.path.exists(image_path):
                     raise Exception(f"图片文件不存在: {image_path}")
-                try:
-                    location = pyautogui.locateOnScreen(image_path, confidence=confidence)
-                    if location:
-                        center = pyautogui.center(location)
-                        pyautogui.click(center.x, center.y)
+                
+                if not self.background_mode:
+                    self._activate_window_for_image()
+                
+                location = None
+                for attempt in range(3):
+                    try:
+                        location = pyautogui.locateOnScreen(image_path, confidence=confidence)
+                        if location:
+                            break
+                    except pyautogui.ImageNotFoundException:
+                        pass
+                    time.sleep(0.2)
+                
+                if location:
+                    center = pyautogui.center(location)
+                    if self.background_mode and self.window_title:
+                        from utils.background_click import create_background_clicker
+                        clicker = create_background_clicker(window_title=self.window_title)
+                        if clicker:
+                            rect = clicker.rect
+                            rel_x = center.x - rect[0]
+                            rel_y = center.y - rect[1]
+                            result = clicker.click(rel_x, rel_y, background=True)
+                            if not result.success:
+                                pyautogui.click(center.x, center.y)
+                        else:
+                            pyautogui.click(center.x, center.y)
                     else:
-                        raise Exception(f"屏幕上未找到匹配图片")
-                except pyautogui.ImageNotFoundException:
-                    raise Exception(f"屏幕上未找到匹配图片")
-                except Exception as e:
-                    raise Exception(f"图片识别失败: {str(e)}")
+                        pyautogui.click(center.x, center.y)
+                else:
+                    raise Exception(f"屏幕上未找到匹配图片 (置信度: {confidence})")
             
             elif self.action_type == ActionType.IMAGE_WAIT_CLICK:
                 image_path = self.params.get('image_path', '')
@@ -257,9 +313,14 @@ class Action:
                 if not os.path.exists(image_path):
                     raise Exception(f"图片文件不存在: {image_path}")
                 
+                if not self.background_mode:
+                    self._activate_window_for_image()
+                
                 location = None
                 start_time = time.time()
                 while (time.time() - start_time) < timeout:
+                    if should_stop and should_stop():
+                        return False
                     try:
                         location = pyautogui.locateOnScreen(image_path, confidence=confidence)
                         if location:
@@ -272,9 +333,22 @@ class Action:
                 
                 if location:
                     center = pyautogui.center(location)
-                    pyautogui.click(center.x, center.y)
+                    if self.background_mode and self.window_title:
+                        from utils.background_click import create_background_clicker
+                        clicker = create_background_clicker(window_title=self.window_title)
+                        if clicker:
+                            rect = clicker.rect
+                            rel_x = center.x - rect[0]
+                            rel_y = center.y - rect[1]
+                            result = clicker.click(rel_x, rel_y, background=True)
+                            if not result.success:
+                                pyautogui.click(center.x, center.y)
+                        else:
+                            pyautogui.click(center.x, center.y)
+                    else:
+                        pyautogui.click(center.x, center.y)
                 else:
-                    raise Exception(f"等待超时，屏幕上未找到匹配图片")
+                    raise Exception(f"等待超时，屏幕上未找到匹配图片 (置信度: {confidence}, 超时: {timeout}秒)")
             
             elif self.action_type == ActionType.IMAGE_CHECK:
                 image_path = self.params.get('image_path', '')
@@ -285,6 +359,9 @@ class Action:
                 if not os.path.exists(image_path):
                     raise Exception(f"图片文件不存在: {image_path}")
                 
+                if not self.background_mode:
+                    self._activate_window_for_image()
+                
                 marker = self.condition_marker
                 if not marker:
                     raise Exception("无法生成条件标记")
@@ -292,19 +369,23 @@ class Action:
                 var_name = marker[1:]
                 var_manager = VariableManager.get_instance()
                 
-                try:
-                    location = pyautogui.locateOnScreen(image_path, confidence=confidence)
-                    if location:
-                        var_manager.set(var_name, True)
-                        var_manager.set(f"{var_name}_x", location.left)
-                        var_manager.set(f"{var_name}_y", location.top)
-                        var_manager.set(f"{var_name}_width", location.width)
-                        var_manager.set(f"{var_name}_height", location.height)
-                    else:
-                        var_manager.set(var_name, False)
-                except pyautogui.ImageNotFoundException:
-                    var_manager.set(var_name, False)
-                except Exception as e:
+                location = None
+                for attempt in range(3):
+                    try:
+                        location = pyautogui.locateOnScreen(image_path, confidence=confidence)
+                        if location:
+                            break
+                    except pyautogui.ImageNotFoundException:
+                        pass
+                    time.sleep(0.1)
+                
+                if location:
+                    var_manager.set(var_name, True)
+                    var_manager.set(f"{var_name}_x", location.left)
+                    var_manager.set(f"{var_name}_y", location.top)
+                    var_manager.set(f"{var_name}_width", location.width)
+                    var_manager.set(f"{var_name}_height", location.height)
+                else:
                     var_manager.set(var_name, False)
             
             elif self.action_type == ActionType.ACTION_GROUP_REF:
@@ -320,13 +401,46 @@ class Action:
                     if not group:
                         raise Exception(f"动作组不存在: {group_name}")
                 
-                for group_action in group.actions:
+                self._sub_actions = []
+                for sub_index, group_action in enumerate(group.actions):
                     if should_stop and should_stop():
                         return False
                     if not group_action.check_condition():
                         print(f"[条件跳过] {group_action.description} - 条件不满足: {group_action.condition}")
                         continue
+                    
+                    if group_action.action_type in [ActionType.MOUSE_CLICK_RELATIVE, ActionType.MOUSE_MOVE_RELATIVE]:
+                        group_action.use_relative_coords = True
+                        if group_action.background_mode and not group_action.window_title:
+                            group_action.window_title = self.window_title
+                    
+                    if group_action.action_type in [ActionType.ACTION_GROUP_REF, ActionType.IMAGE_CLICK, ActionType.IMAGE_WAIT_CLICK, ActionType.IMAGE_CHECK]:
+                        if not group_action.window_title:
+                            group_action.window_title = self.window_title
+                    
+                    group_action._is_from_group = True
+                    group_action._group_name = group_name
+                    group_action._sub_index = sub_index
+                    self._sub_actions.append(group_action)
+                    
+                    if hasattr(self, '_on_sub_action_start') and self._on_sub_action_start:
+                        self._on_sub_action_start(group_action, sub_index)
+                    
+                    def on_nested_sub_start(nested_action, nested_index):
+                        if hasattr(self, '_on_nested_sub_action_start') and self._on_nested_sub_action_start:
+                            self._on_nested_sub_action_start(sub_index, nested_action, nested_index)
+                    
+                    def on_nested_sub_end(nested_action, nested_index, success):
+                        if hasattr(self, '_on_nested_sub_action_end') and self._on_nested_sub_action_end:
+                            self._on_nested_sub_action_end(sub_index, nested_action, nested_index, success)
+                    
+                    group_action._on_sub_action_start = on_nested_sub_start
+                    group_action._on_sub_action_end = on_nested_sub_end
+                    
                     group_action.execute(window_offset=window_offset, should_stop=should_stop, local_group_manager=local_group_manager)
+                    
+                    if hasattr(self, '_on_sub_action_end') and self._on_sub_action_end:
+                        self._on_sub_action_end(group_action, sub_index, True)
             
             time.sleep(self.delay_after)
             return True

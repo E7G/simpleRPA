@@ -158,7 +158,7 @@ class PropertyPanel(CardWidget):
         params_label = StrongBodyLabel("参数设置")
         self._content_layout.addWidget(params_label)
         
-        if self._current_action.action_type in [ActionType.MOUSE_CLICK_RELATIVE, ActionType.MOUSE_MOVE_RELATIVE]:
+        if self._current_action.action_type in [ActionType.MOUSE_CLICK_RELATIVE, ActionType.MOUSE_MOVE_RELATIVE, ActionType.IMAGE_CLICK, ActionType.IMAGE_WAIT_CLICK]:
             self._add_window_mode_section()
         
         processed_params = set()

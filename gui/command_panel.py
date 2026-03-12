@@ -1,9 +1,9 @@
 from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, 
-    QSpacerItem, QSizePolicy, QScrollArea, QFrame
+    QSpacerItem, QSizePolicy, QScrollArea, QFrame, QStackedWidget
 )
 from PyQt5.QtCore import Qt, pyqtSignal, QTimer, QPropertyAnimation, QEasingCurve
-from PyQt5.QtGui import QColor
+from PyQt5.QtGui import QColor, QFont
 from typing import Optional, List
 
 from qfluentwidgets import (
@@ -11,13 +11,13 @@ from qfluentwidgets import (
     PushButton, PrimaryPushButton, LineEdit, TransparentToolButton, 
     FluentIcon, InfoBar, InfoBarPosition, MessageBox, IconWidget,
     SubtitleLabel, CaptionLabel, ScrollArea, SimpleCardWidget,
-    isDarkTheme, themeColor
+    TitleLabel, isDarkTheme, themeColor, HeaderCardWidget
 )
 
 from core.command_manager import CommandManager, LaunchCommand
 
 
-class CommandCard(ElevatedCardWidget):
+class CommandCard(CardWidget):
     execute_requested = pyqtSignal(str)
     edit_requested = pyqtSignal(str)
     delete_requested = pyqtSignal(str)
@@ -25,123 +25,131 @@ class CommandCard(ElevatedCardWidget):
     def __init__(self, command: LaunchCommand, parent=None):
         super().__init__(parent)
         self._command = command
-        self._hover_animation = None
         self._setup_ui()
     
     def _setup_ui(self):
-        self._update_style()
-        
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(20, 16, 20, 16)
-        layout.setSpacing(16)
+        layout.setContentsMargins(24, 20, 20, 20)
+        layout.setSpacing(20)
+        
+        icon_container = QWidget()
+        icon_container.setFixedSize(56, 56)
+        icon_layout = QVBoxLayout(icon_container)
+        icon_layout.setContentsMargins(0, 0, 0, 0)
         
         icon_widget = IconWidget(FluentIcon.APPLICATION)
-        icon_widget.setFixedSize(40, 40)
-        layout.addWidget(icon_widget)
+        icon_widget.setFixedSize(36, 36)
+        icon_layout.addWidget(icon_widget, 0, Qt.AlignCenter)
+        
+        layout.addWidget(icon_container)
         
         info_layout = QVBoxLayout()
-        info_layout.setSpacing(6)
+        info_layout.setSpacing(8)
         
-        name_label = StrongBodyLabel(self._command.name)
-        info_layout.addWidget(name_label)
+        name_row = QHBoxLayout()
+        name_label = SubtitleLabel(self._command.name)
+        name_row.addWidget(name_label)
+        name_row.addStretch()
+        info_layout.addLayout(name_row)
         
-        cmd_container = QHBoxLayout()
-        cmd_container.setSpacing(4)
+        cmd_row = QHBoxLayout()
+        cmd_row.setSpacing(8)
         
         cmd_icon = IconWidget(FluentIcon.CODE)
         cmd_icon.setFixedSize(14, 14)
-        cmd_container.addWidget(cmd_icon)
+        cmd_row.addWidget(cmd_icon)
         
-        self._cmd_label = CaptionLabel(self._command.command)
-        self._cmd_label.setWordWrap(True)
-        cmd_container.addWidget(self._cmd_label, 1)
+        cmd_text = self._command.command
+        if len(cmd_text) > 50:
+            cmd_text = cmd_text[:47] + "..."
+        self._cmd_label = StrongBodyLabel(cmd_text)
+        self._cmd_label.setStyleSheet("color: #666;")
+        cmd_row.addWidget(self._cmd_label)
+        cmd_row.addStretch()
+        info_layout.addLayout(cmd_row)
         
-        info_layout.addLayout(cmd_container)
+        if self._command.description or self._command.window_title_pattern:
+            extra_row = QHBoxLayout()
+            extra_row.setSpacing(12)
+            
+            if self._command.window_title_pattern:
+                window_icon = IconWidget(FluentIcon.SETTING)
+                window_icon.setFixedSize(14, 14)
+                extra_row.addWidget(window_icon)
+                window_label = StrongBodyLabel(self._command.window_title_pattern[:30])
+                window_label.setStyleSheet("color: #888;")
+                extra_row.addWidget(window_label)
+            
+            if self._command.description and self._command.window_title_pattern:
+                sep = StrongBodyLabel("·")
+                sep.setStyleSheet("color: #888;")
+                extra_row.addWidget(sep)
+            
+            if self._command.description:
+                desc_label = StrongBodyLabel(self._command.description[:30])
+                desc_label.setStyleSheet("color: #888;")
+                extra_row.addWidget(desc_label)
+            
+            extra_row.addStretch()
+            info_layout.addLayout(extra_row)
         
-        if self._command.description:
-            self._desc_label = CaptionLabel(self._command.description)
-            self._desc_label.setWordWrap(True)
-            info_layout.addWidget(self._desc_label)
-        else:
-            self._desc_label = None
+        stats_row = QHBoxLayout()
+        stats_row.setSpacing(16)
         
-        stats_layout = QHBoxLayout()
-        stats_layout.setSpacing(12)
-        
-        from datetime import datetime
-        self._time_label = None
-        self._count_label = None
+        if self._command.use_count > 0:
+            count_icon = IconWidget(FluentIcon.PIN)
+            count_icon.setFixedSize(14, 14)
+            stats_row.addWidget(count_icon)
+            count_label = StrongBodyLabel(f"使用 {self._command.use_count} 次")
+            count_label.setStyleSheet("color: #888;")
+            stats_row.addWidget(count_label)
         
         if self._command.last_used:
+            from datetime import datetime
             try:
                 last_used = datetime.fromisoformat(self._command.last_used)
                 time_str = last_used.strftime("%m-%d %H:%M")
-                self._time_label = CaptionLabel(f"最近使用: {time_str}")
-                stats_layout.addWidget(self._time_label)
+                time_icon = IconWidget(FluentIcon.STOP_WATCH)
+                time_icon.setFixedSize(14, 14)
+                stats_row.addWidget(time_icon)
+                time_label = StrongBodyLabel(f"最近 {time_str}")
+                time_label.setStyleSheet("color: #888;")
+                stats_row.addWidget(time_label)
             except:
                 pass
         
-        if self._command.use_count > 0:
-            self._count_label = CaptionLabel(f"使用 {self._command.use_count} 次")
-            stats_layout.addWidget(self._count_label)
-        
-        stats_layout.addStretch()
-        info_layout.addLayout(stats_layout)
+        stats_row.addStretch()
+        info_layout.addLayout(stats_row)
         
         layout.addLayout(info_layout, 1)
         
-        btn_layout = QVBoxLayout()
-        btn_layout.setSpacing(8)
+        btn_layout = QHBoxLayout()
+        btn_layout.setSpacing(12)
         
-        self._run_btn = PrimaryPushButton("  启动  ")
-        self._run_btn.setFixedHeight(36)
+        self._run_btn = PrimaryPushButton(FluentIcon.PLAY, "启动")
+        self._run_btn.setFixedHeight(44)
         self._run_btn.clicked.connect(lambda: self.execute_requested.emit(self._command.id))
         btn_layout.addWidget(self._run_btn)
         
-        action_btn_layout = QHBoxLayout()
-        action_btn_layout.setSpacing(4)
-        
         self._edit_btn = TransparentToolButton(FluentIcon.EDIT)
-        self._edit_btn.setFixedSize(28, 28)
+        self._edit_btn.setFixedSize(44, 44)
         self._edit_btn.clicked.connect(lambda: self.edit_requested.emit(self._command.id))
-        action_btn_layout.addWidget(self._edit_btn)
+        btn_layout.addWidget(self._edit_btn)
         
         self._delete_btn = TransparentToolButton(FluentIcon.DELETE)
-        self._delete_btn.setFixedSize(28, 28)
+        self._delete_btn.setFixedSize(44, 44)
         self._delete_btn.clicked.connect(lambda: self.delete_requested.emit(self._command.id))
-        action_btn_layout.addWidget(self._delete_btn)
-        
-        btn_layout.addLayout(action_btn_layout)
+        btn_layout.addWidget(self._delete_btn)
         
         layout.addLayout(btn_layout)
-    
-    def _update_style(self):
-        if isDarkTheme():
-            self.setStyleSheet("""
-                CommandCard {
-                    background-color: rgba(45, 45, 45, 0.9);
-                    border: 1px solid rgba(255, 255, 255, 0.08);
-                    border-radius: 12px;
-                }
-            """)
-        else:
-            self.setStyleSheet("""
-                CommandCard {
-                    background-color: rgba(255, 255, 255, 0.9);
-                    border: 1px solid rgba(0, 0, 0, 0.05);
-                    border-radius: 12px;
-                }
-            """)
-    
-    def paintEvent(self, event):
-        self._update_style()
-        super().paintEvent(event)
+        
+        self.setFixedHeight(120)
     
     def get_command_id(self) -> str:
         return self._command.id
 
 
-class FormCard(ElevatedCardWidget):
+class FormCard(CardWidget):
     save_requested = pyqtSignal(str, str, str, str)
     cancel_requested = pyqtSignal()
     pick_window_requested = pyqtSignal()
@@ -152,16 +160,14 @@ class FormCard(ElevatedCardWidget):
         self._setup_ui()
     
     def _setup_ui(self):
-        self._update_style()
-        
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(24, 20, 24, 20)
-        layout.setSpacing(16)
+        layout.setContentsMargins(28, 24, 28, 28)
+        layout.setSpacing(24)
         
         header_layout = QHBoxLayout()
         
         self._form_icon = IconWidget(FluentIcon.ADD)
-        self._form_icon.setFixedSize(24, 24)
+        self._form_icon.setFixedSize(32, 32)
         header_layout.addWidget(self._form_icon)
         
         self._form_title = SubtitleLabel("添加新命令")
@@ -170,131 +176,119 @@ class FormCard(ElevatedCardWidget):
         header_layout.addStretch()
         
         self._cancel_btn = TransparentToolButton(FluentIcon.CANCEL)
-        self._cancel_btn.setFixedSize(28, 28)
+        self._cancel_btn.setFixedSize(40, 40)
         self._cancel_btn.clicked.connect(self.cancel_requested.emit)
         header_layout.addWidget(self._cancel_btn)
         
         layout.addLayout(header_layout)
         
-        form_grid = QGridLayout()
-        form_grid.setSpacing(12)
-        form_grid.setColumnStretch(1, 1)
+        form_layout = QVBoxLayout()
+        form_layout.setSpacing(20)
         
-        labels = ["名称", "命令", "窗口标识", "描述"]
-        placeholders = [
-            "输入命令名称，如：记事本",
-            "输入启动命令或程序路径，如：notepad.exe",
-            "窗口标题关键字（用于检测是否已启动）",
-            "可选描述信息"
-        ]
+        name_row = QHBoxLayout()
+        name_label = BodyLabel("名称")
+        name_label.setFixedWidth(100)
+        name_row.addWidget(name_label)
+        self._name_edit = LineEdit()
+        self._name_edit.setPlaceholderText("输入命令名称，如：记事本")
+        self._name_edit.setClearButtonEnabled(True)
+        self._name_edit.setMinimumHeight(44)
+        name_row.addWidget(self._name_edit)
+        form_layout.addLayout(name_row)
         
-        self._label_widgets = []
-        self._edits = []
+        cmd_row = QHBoxLayout()
+        cmd_label = BodyLabel("命令")
+        cmd_label.setFixedWidth(100)
+        cmd_row.addWidget(cmd_label)
+        self._cmd_edit = LineEdit()
+        self._cmd_edit.setPlaceholderText("输入启动命令或程序路径，如：notepad.exe")
+        self._cmd_edit.setClearButtonEnabled(True)
+        self._cmd_edit.setMinimumHeight(44)
+        cmd_row.addWidget(self._cmd_edit)
+        form_layout.addLayout(cmd_row)
         
-        for i, (label, placeholder) in enumerate(zip(labels, placeholders)):
-            label_widget = BodyLabel(f"{label}:")
-            label_widget.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
-            form_grid.addWidget(label_widget, i, 0)
-            self._label_widgets.append(label_widget)
-            
-            if i == 2:
-                row_layout = QHBoxLayout()
-                row_layout.setSpacing(8)
-                
-                edit = LineEdit()
-                edit.setPlaceholderText(placeholder)
-                edit.setClearButtonEnabled(True)
-                edit.setMinimumHeight(36)
-                row_layout.addWidget(edit, 1)
-                
-                self._pick_btn = PushButton("拾取窗口")
-                self._pick_btn.setFixedHeight(36)
-                self._pick_btn.clicked.connect(self.pick_window_requested.emit)
-                row_layout.addWidget(self._pick_btn)
-                
-                form_grid.addLayout(row_layout, i, 1)
-            else:
-                edit = LineEdit()
-                edit.setPlaceholderText(placeholder)
-                edit.setClearButtonEnabled(True)
-                edit.setMinimumHeight(36)
-                form_grid.addWidget(edit, i, 1)
-            
-            self._edits.append(edit)
+        window_row = QHBoxLayout()
+        window_label = BodyLabel("窗口标识")
+        window_label.setFixedWidth(100)
+        window_row.addWidget(window_label)
+        self._window_edit = LineEdit()
+        self._window_edit.setPlaceholderText("窗口标题关键字（用于检测是否已启动）")
+        self._window_edit.setClearButtonEnabled(True)
+        self._window_edit.setMinimumHeight(44)
+        window_row.addWidget(self._window_edit)
         
-        layout.addLayout(form_grid)
+        self._pick_btn = PushButton(FluentIcon.SETTING, "拾取")
+        self._pick_btn.setFixedHeight(44)
+        self._pick_btn.clicked.connect(self.pick_window_requested.emit)
+        window_row.addWidget(self._pick_btn)
+        form_layout.addLayout(window_row)
         
-        tip_label = CaptionLabel("提示：点击\"拾取窗口\"可自动获取窗口标题作为窗口标识")
+        desc_row = QHBoxLayout()
+        desc_label = BodyLabel("描述")
+        desc_label.setFixedWidth(100)
+        desc_row.addWidget(desc_label)
+        self._desc_edit = LineEdit()
+        self._desc_edit.setPlaceholderText("可选描述信息")
+        self._desc_edit.setClearButtonEnabled(True)
+        self._desc_edit.setMinimumHeight(44)
+        desc_row.addWidget(self._desc_edit)
+        form_layout.addLayout(desc_row)
+        
+        layout.addLayout(form_layout)
+        
+        tip_label = StrongBodyLabel("提示：点击\"拾取\"按钮可自动获取窗口信息")
         tip_label.setStyleSheet("color: #888;")
         layout.addWidget(tip_label)
         
         btn_layout = QHBoxLayout()
         btn_layout.addStretch()
         
-        self._save_btn = PrimaryPushButton("  保存  ")
-        self._save_btn.setFixedHeight(36)
+        self._save_btn = PrimaryPushButton(FluentIcon.SAVE, "保存")
+        self._save_btn.setFixedHeight(44)
         self._save_btn.clicked.connect(self._on_save)
         btn_layout.addWidget(self._save_btn)
         
         layout.addLayout(btn_layout)
     
-    def _update_style(self):
-        if isDarkTheme():
-            self.setStyleSheet("""
-                FormCard {
-                    background-color: rgba(45, 45, 45, 0.95);
-                    border: 1px solid rgba(255, 255, 255, 0.1);
-                    border-radius: 12px;
-                }
-            """)
-        else:
-            self.setStyleSheet("""
-                FormCard {
-                    background-color: rgba(255, 255, 255, 0.95);
-                    border: 1px solid rgba(0, 120, 212, 0.15);
-                    border-radius: 12px;
-                }
-            """)
-    
-    def paintEvent(self, event):
-        self._update_style()
-        super().paintEvent(event)
-    
     def _on_save(self):
-        name = self._edits[0].text().strip()
-        command = self._edits[1].text().strip()
-        pattern = self._edits[2].text().strip()
-        description = self._edits[3].text().strip()
+        name = self._name_edit.text().strip()
+        command = self._cmd_edit.text().strip()
+        pattern = self._window_edit.text().strip()
+        description = self._desc_edit.text().strip()
         self.save_requested.emit(name, command, pattern, description)
     
     def set_editing(self, cmd: LaunchCommand):
         self._editing_id = cmd.id
         self._form_icon.setIcon(FluentIcon.EDIT)
         self._form_title.setText("编辑命令")
-        self._edits[0].setText(cmd.name)
-        self._edits[1].setText(cmd.command)
-        self._edits[2].setText(cmd.window_title_pattern)
-        self._edits[3].setText(cmd.description)
+        self._name_edit.setText(cmd.name)
+        self._cmd_edit.setText(cmd.command)
+        self._window_edit.setText(cmd.window_title_pattern)
+        self._desc_edit.setText(cmd.description)
     
     def set_adding(self):
         self._editing_id = None
         self._form_icon.setIcon(FluentIcon.ADD)
         self._form_title.setText("添加新命令")
-        for edit in self._edits:
-            edit.clear()
+        self._name_edit.clear()
+        self._cmd_edit.clear()
+        self._window_edit.clear()
+        self._desc_edit.clear()
     
     def get_editing_id(self) -> Optional[str]:
         return self._editing_id
     
     def clear(self):
-        for edit in self._edits:
-            edit.clear()
+        self._name_edit.clear()
+        self._cmd_edit.clear()
+        self._window_edit.clear()
+        self._desc_edit.clear()
         self._editing_id = None
 
 
 class CommandManagerWidget(QWidget):
     command_executed = pyqtSignal(bool, str)
-    _window_picked = pyqtSignal(int, str, str)  # hwnd, title, process
+    _window_picked = pyqtSignal(int, str, str)
     
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -319,115 +313,95 @@ class CommandManagerWidget(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
         
-        self._header_card = SimpleCardWidget()
-        self._update_header_style()
+        header = QWidget()
+        header.setFixedHeight(100)
+        header_layout = QHBoxLayout(header)
+        header_layout.setContentsMargins(32, 0, 32, 0)
         
-        header_layout = QHBoxLayout(self._header_card)
-        header_layout.setContentsMargins(24, 16, 24, 16)
-        header_layout.setSpacing(16)
+        title_section = QVBoxLayout()
+        title_section.setSpacing(8)
         
-        title_icon = IconWidget(FluentIcon.APPLICATION)
-        title_icon.setFixedSize(28, 28)
-        header_layout.addWidget(title_icon)
+        title_row = QHBoxLayout()
+        title_icon = IconWidget(FluentIcon.COMMAND_PROMPT)
+        title_icon.setFixedSize(32, 32)
+        title_row.addWidget(title_icon)
         
-        title_layout = QVBoxLayout()
-        title_layout.setSpacing(2)
+        title_label = TitleLabel("启动命令")
+        title_row.addWidget(title_label)
+        title_section.addLayout(title_row)
         
-        title_label = SubtitleLabel("启动命令管理")
-        title_layout.addWidget(title_label)
+        subtitle = StrongBodyLabel("管理常用程序和窗口的快速启动命令")
+        subtitle.setStyleSheet("color: #666;")
+        title_section.addWidget(subtitle)
         
-        self._subtitle_label = CaptionLabel("管理常用程序和窗口的启动命令")
-        title_layout.addWidget(self._subtitle_label)
-        
-        header_layout.addLayout(title_layout)
+        header_layout.addLayout(title_section)
         header_layout.addStretch()
         
-        self._add_btn = PrimaryPushButton("  添加命令  ")
-        self._add_btn.setFixedHeight(40)
+        self._add_btn = PrimaryPushButton(FluentIcon.ADD, "添加命令")
+        self._add_btn.setFixedHeight(44)
         self._add_btn.clicked.connect(self._show_add_form)
         header_layout.addWidget(self._add_btn)
         
-        layout.addWidget(self._header_card)
+        layout.addWidget(header)
         
         self._form_card = FormCard()
         self._form_card.setVisible(False)
         self._form_card.save_requested.connect(self._save_command)
         self._form_card.cancel_requested.connect(self._hide_form)
         self._form_card.pick_window_requested.connect(self._on_pick_window)
-        layout.addWidget(self._form_card)
+        
+        form_container = QWidget()
+        form_layout = QVBoxLayout(form_container)
+        form_layout.setContentsMargins(32, 0, 32, 20)
+        form_layout.addWidget(self._form_card)
+        layout.addWidget(form_container)
         
         scroll_area = ScrollArea()
         scroll_area.setWidgetResizable(True)
-        scroll_area.setStyleSheet("""
-            QScrollArea {
-                border: none;
-                background-color: transparent;
-            }
-            QScrollArea > QWidget > QWidget {
-                background-color: transparent;
-            }
-        """)
+        scroll_area.setStyleSheet("QScrollArea { border: none; background: transparent; }")
         
         scroll_content = QWidget()
-        scroll_content.setStyleSheet("background-color: transparent;")
+        scroll_content.setStyleSheet("background: transparent;")
         self._list_layout = QVBoxLayout(scroll_content)
-        self._list_layout.setContentsMargins(24, 16, 24, 24)
-        self._list_layout.setSpacing(12)
+        self._list_layout.setContentsMargins(32, 10, 32, 32)
+        self._list_layout.setSpacing(10)
+        
+        self._empty_widget = self._create_empty_widget()
+        self._list_layout.addWidget(self._empty_widget)
         self._list_layout.addStretch()
         
         scroll_area.setWidget(scroll_content)
         layout.addWidget(scroll_area, 1)
-        
-        self._empty_widget = QWidget()
-        self._empty_widget.setStyleSheet("background-color: transparent;")
-        empty_layout = QVBoxLayout(self._empty_widget)
-        empty_layout.setContentsMargins(24, 60, 24, 60)
-        empty_layout.setSpacing(16)
-        
-        empty_icon = IconWidget(FluentIcon.APPLICATION)
-        empty_icon.setFixedSize(64, 64)
-        empty_layout.addWidget(empty_icon, 0, Qt.AlignCenter)
-        
-        self._empty_title = StrongBodyLabel("暂无启动命令")
-        self._empty_title.setAlignment(Qt.AlignCenter)
-        empty_layout.addWidget(self._empty_title)
-        
-        self._empty_desc = CaptionLabel("点击上方\"添加命令\"按钮创建新命令\n用于快速启动常用程序和窗口")
-        self._empty_desc.setAlignment(Qt.AlignCenter)
-        empty_layout.addWidget(self._empty_desc)
-        
-        empty_layout.addStretch()
-        
-        self._list_layout.insertWidget(0, self._empty_widget)
     
-    def _update_header_style(self):
-        if isDarkTheme():
-            self._header_card.setStyleSheet("""
-                SimpleCardWidget {
-                    background-color: rgba(40, 40, 40, 0.95);
-                    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
-                }
-            """)
-        else:
-            self._header_card.setStyleSheet("""
-                SimpleCardWidget {
-                    background-color: rgba(248, 249, 250, 0.95);
-                    border-bottom: 1px solid rgba(0, 0, 0, 0.08);
-                }
-            """)
-    
-    def paintEvent(self, event):
-        self._update_header_style()
-        super().paintEvent(event)
+    def _create_empty_widget(self) -> QWidget:
+        widget = QWidget()
+        widget.setStyleSheet("background: transparent;")
+        layout = QVBoxLayout(widget)
+        layout.setContentsMargins(40, 60, 40, 60)
+        layout.setSpacing(18)
+        
+        icon = IconWidget(FluentIcon.APPLICATION)
+        icon.setFixedSize(64, 64)
+        layout.addWidget(icon, 0, Qt.AlignCenter)
+        
+        title = SubtitleLabel("暂无启动命令")
+        title.setAlignment(Qt.AlignCenter)
+        layout.addWidget(title)
+        
+        desc = StrongBodyLabel("点击上方\"添加命令\"按钮创建新命令\n用于快速启动常用程序和窗口")
+        desc.setAlignment(Qt.AlignCenter)
+        desc.setStyleSheet("color: #888;")
+        layout.addWidget(desc)
+        
+        return widget
     
     def _load_commands(self):
-        commands = self._command_manager.get_all_commands()
-        
         while self._list_layout.count() > 2:
             item = self._list_layout.takeAt(1)
             if item.widget() and item.widget() != self._empty_widget:
                 item.widget().deleteLater()
         
+        commands = self._command_manager.get_all_commands()
         self._empty_widget.setVisible(len(commands) == 0)
         
         for cmd in sorted(commands, key=lambda x: x.use_count, reverse=True):
@@ -440,7 +414,7 @@ class CommandManagerWidget(QWidget):
     def _show_add_form(self):
         self._form_card.set_adding()
         self._form_card.setVisible(True)
-        self._form_card._edits[0].setFocus()
+        self._form_card._name_edit.setFocus()
     
     def _hide_form(self):
         self._form_card.setVisible(False)
@@ -448,7 +422,6 @@ class CommandManagerWidget(QWidget):
     
     def _on_pick_window(self):
         self._form_card._pick_btn.setText("拾取中...")
-        self._form_card._pick_btn.setChecked(True)
         self._start_pick()
     
     def _start_pick(self):
@@ -466,8 +439,7 @@ class CommandManagerWidget(QWidget):
         if self._listener:
             self._listener.stop()
             self._listener = None
-        self._form_card._pick_btn.setChecked(False)
-        self._form_card._pick_btn.setText("拾取窗口")
+        self._form_card._pick_btn.setText("拾取")
     
     def _select_window_at_point(self, x: int, y: int):
         if not self._win32_available:
@@ -499,9 +471,9 @@ class CommandManagerWidget(QWidget):
             'process': process
         }
         
-        self._form_card._edits[0].setText(title)
-        self._form_card._edits[1].setText(process)
-        self._form_card._edits[2].setText(title)
+        self._form_card._name_edit.setText(title)
+        self._form_card._cmd_edit.setText(process)
+        self._form_card._window_edit.setText(title)
         
         InfoBar.success(
             title="窗口已选择",
@@ -611,7 +583,7 @@ class CommandManagerWidget(QWidget):
         
         self._form_card.set_editing(cmd)
         self._form_card.setVisible(True)
-        self._form_card._edits[0].setFocus()
+        self._form_card._name_edit.setFocus()
     
     def _on_delete(self, cmd_id: str):
         cmd = self._command_manager.get_command(cmd_id)

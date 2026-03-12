@@ -93,7 +93,12 @@ class Player:
             'on_error': [],
             'on_finished': [],
             'on_repeat_changed': [],
-            'on_window_error': []
+            'on_window_error': [],
+            'on_window_launching': [],
+            'on_window_found': [],
+            'on_window_not_found': [],
+            'on_sub_action_start': [],
+            'on_sub_action_end': []
         }
     
     def set_local_group_manager(self, manager):
@@ -230,7 +235,17 @@ class Player:
             self._emit('on_state_changed', self.state)
             return
         
-        self._ensure_target_window_exists()
+        success, error_msg = self._ensure_target_window_exists()
+        if not success:
+            if error_msg and error_msg.startswith("window_not_found:"):
+                window_title = error_msg[len("window_not_found:"):]
+                self._emit('on_window_not_found', window_title)
+            else:
+                self._emit('on_window_error', None, -1, error_msg)
+            self.state = PlayerState.IDLE
+            self._emit('on_state_changed', self.state)
+            self._emit('on_finished', False)
+            return
         
         self.state = PlayerState.PLAYING
         self.current_index = 0
@@ -244,38 +259,72 @@ class Player:
         
         self._emit('on_state_changed', self.state)
     
-    def _ensure_target_window_exists(self):
+    def _ensure_target_window_exists(self) -> Tuple[bool, str]:
         if not self._window_title:
-            return
+            return True, ""
         
         try:
             import win32gui
             
+            def find_window_by_title(title_pattern: str) -> Optional[int]:
+                windows_found = []
+                
+                def enum_callback(hwnd, _):
+                    if win32gui.IsWindowVisible(hwnd):
+                        title = win32gui.GetWindowText(hwnd)
+                        if title_pattern.lower() in title.lower():
+                            windows_found.append(hwnd)
+                    return True
+                
+                win32gui.EnumWindows(enum_callback, None)
+                return windows_found[0] if windows_found else None
+            
+            existing_hwnd = find_window_by_title(self._window_title)
+            if existing_hwnd:
+                return True, ""
+            
             from core.command_manager import CommandManager
             cmd_manager = CommandManager.get_instance()
-            
             commands = cmd_manager.get_all_commands()
             
+            matched_cmd = None
             for cmd in commands:
                 if cmd.window_title_pattern and cmd.window_title_pattern.lower() in self._window_title.lower():
-                    windows_found = []
-                    
-                    def enum_callback(hwnd, _):
-                        if win32gui.IsWindowVisible(hwnd):
-                            title = win32gui.GetWindowText(hwnd)
-                            if cmd.window_title_pattern.lower() in title.lower():
-                                windows_found.append(hwnd)
-                        return True
-                    
-                    win32gui.EnumWindows(enum_callback, None)
-                    
-                    if not windows_found:
-                        success, message, already_running = cmd_manager.check_and_launch(cmd.id)
-                        if success and not already_running:
-                            time.sleep(2)
+                    matched_cmd = cmd
                     break
-        except Exception:
-            pass
+                if cmd.name.lower() in self._window_title.lower():
+                    matched_cmd = cmd
+                    break
+            
+            if matched_cmd:
+                self._emit('on_window_launching', matched_cmd.name)
+                
+                success, message, already_running = cmd_manager.check_and_launch(matched_cmd.id)
+                if not success:
+                    return False, f"启动命令执行失败: {message}"
+                
+                max_wait = 30
+                wait_interval = 0.5
+                waited = 0
+                
+                while waited < max_wait:
+                    if self._stop_flag:
+                        return False, "用户取消"
+                    
+                    hwnd = find_window_by_title(self._window_title)
+                    if hwnd:
+                        self._emit('on_window_found', self._window_title)
+                        return True, ""
+                    
+                    time.sleep(wait_interval)
+                    waited += wait_interval
+                
+                return False, f"等待窗口超时: 已执行启动命令 '{matched_cmd.name}'，但窗口 '{self._window_title}' 未在 {max_wait} 秒内出现"
+            else:
+                return False, f"window_not_found:{self._window_title}"
+                
+        except Exception as e:
+            return False, f"窗口检查失败: {str(e)}"
     
     def pause(self):
         if self.state == PlayerState.PLAYING:
@@ -431,12 +480,53 @@ class Player:
                 
                 self._emit('on_action_start', action, i)
                 
+                sub_indices_stack = []
+                
+                def on_sub_action_start(sub_action, sub_index):
+                    sub_indices_stack.append(sub_index)
+                    indices = sub_indices_stack.copy()
+                    self._emit('on_sub_action_start', action, i, sub_action, sub_index, indices)
+                
+                def on_sub_action_end(sub_action, sub_index, success):
+                    indices = sub_indices_stack.copy()
+                    self._emit('on_sub_action_end', action, i, sub_action, sub_index, indices, success)
+                    if sub_indices_stack:
+                        sub_indices_stack.pop()
+                
+                def on_nested_sub_action_start(parent_index, nested_action, nested_index):
+                    sub_indices_stack.append(nested_index)
+                    indices = sub_indices_stack.copy()
+                    self._emit('on_sub_action_start', action, i, nested_action, nested_index, indices)
+                
+                def on_nested_sub_action_end(parent_index, nested_action, nested_index, success):
+                    indices = sub_indices_stack.copy()
+                    self._emit('on_sub_action_end', action, i, nested_action, nested_index, indices, success)
+                    if sub_indices_stack:
+                        sub_indices_stack.pop()
+                
+                action._on_sub_action_start = on_sub_action_start
+                action._on_sub_action_end = on_sub_action_end
+                action._on_nested_sub_action_start = on_nested_sub_action_start
+                action._on_nested_sub_action_end = on_nested_sub_action_end
+                
+                if self._window_title and not action.window_title:
+                    action.window_title = self._window_title
+                
                 try:
                     success = action.execute(window_offset=current_offset, should_stop=lambda: self._stop_flag, local_group_manager=self._local_group_manager)
                     self._emit('on_action_end', action, i, success)
                 except Exception as e:
                     self._emit('on_error', action, i, str(e))
                     self._emit('on_action_end', action, i, False)
+                finally:
+                    if hasattr(action, '_on_sub_action_start'):
+                        delattr(action, '_on_sub_action_start')
+                    if hasattr(action, '_on_sub_action_end'):
+                        delattr(action, '_on_sub_action_end')
+                    if hasattr(action, '_on_nested_sub_action_start'):
+                        delattr(action, '_on_nested_sub_action_start')
+                    if hasattr(action, '_on_nested_sub_action_end'):
+                        delattr(action, '_on_nested_sub_action_end')
                 
                 completed_actions += 1
                 self._emit('on_progress', -1, i, repeat_count)

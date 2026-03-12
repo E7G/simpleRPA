@@ -28,6 +28,8 @@ class Config:
     infinite_loop: bool = False
     timeout_seconds: float = 0
     
+    last_dashboard_list: str = ''
+    
     _config_path: str = field(default='', repr=False)
     
     def __post_init__(self):
@@ -63,6 +65,7 @@ class Config:
                 'current_tab_index': self.current_tab_index,
                 'infinite_loop': self.infinite_loop,
                 'timeout_seconds': self.timeout_seconds,
+                'last_dashboard_list': self.last_dashboard_list,
             }
             
             with open(save_path, 'w', encoding='utf-8') as f:
@@ -103,6 +106,7 @@ class Config:
             self.current_tab_index = data.get('current_tab_index', 0)
             self.infinite_loop = data.get('infinite_loop', False)
             self.timeout_seconds = data.get('timeout_seconds', 0)
+            self.last_dashboard_list = data.get('last_dashboard_list', '')
             
             return True
         except Exception as e:

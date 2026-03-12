@@ -18,6 +18,8 @@ class Exporter:
         self.description = ""
         self.include_window_setup = False
         self.target_window_title = ""
+        self.target_window_class = ""
+        self.target_window_hwnd = 0
         self._local_group_manager: Optional[LocalActionGroupManager] = None
         self._global_group_manager = GlobalActionGroupManager.get_instance()
         self._used_groups: Set[str] = set()
@@ -28,9 +30,11 @@ class Exporter:
         self.author = author
         self.description = description
     
-    def set_window_setup(self, include: bool, window_title: str = ""):
+    def set_window_setup(self, include: bool, window_title: str = "", window_class: str = "", window_hwnd: int = 0):
         self.include_window_setup = include
         self.target_window_title = window_title
+        self.target_window_class = window_class
+        self.target_window_hwnd = window_hwnd
     
     def set_local_group_manager(self, manager: LocalActionGroupManager):
         self._local_group_manager = manager
@@ -46,13 +50,17 @@ class Exporter:
                     group = None
                     if self._local_group_manager:
                         group = self._local_group_manager.get_group(group_name)
+                        print(f"[DEBUG] _collect_used_groups: 从 local_group_manager 查找 '{group_name}': {group is not None}")
                     if not group:
                         group = self._global_group_manager.get_group(group_name)
+                        print(f"[DEBUG] _collect_used_groups: 从 global_group_manager 查找 '{group_name}': {group is not None}")
                     
                     if group:
                         self._used_groups.add(group_name)
                         action_groups[group_name] = group.to_dict()
                         self._collect_used_groups(group.actions, action_groups)
+                    else:
+                        print(f"[DEBUG] _collect_used_groups: 动作组 '{group_name}' 未找到!")
         
         return action_groups
     
@@ -452,16 +460,28 @@ class Exporter:
             action_groups = self._collect_used_groups(actions)
             self._collect_embedded_images(actions)
             
+            print(f"[DEBUG] 导出时收集的动作组: {list(action_groups.keys())}")
+            if self._local_group_manager:
+                print(f"[DEBUG] local_group_manager 中的动作组: {list(self._local_group_manager._groups.keys())}")
+            
             data = {
                 'name': self.script_name,
                 'author': self.author,
                 'description': self.description,
                 'created': datetime.now().isoformat(),
-                'version': '2.0',
+                'version': '2.1',
                 'actions': [action.to_dict() for action in actions],
                 'action_groups': action_groups,
                 'embedded_images': {os.path.basename(k): v for k, v in self._embedded_images.items()}
             }
+            
+            if self.include_window_setup:
+                data['window_setup'] = {
+                    'enabled': True,
+                    'title': self.target_window_title,
+                    'window_class': self.target_window_class,
+                    'hwnd': self.target_window_hwnd
+                }
             
             if self._local_group_manager:
                 local_groups = self._local_group_manager.to_dict()
@@ -483,20 +503,28 @@ class Exporter:
                 data = json.load(f)
             
             embedded_images = data.get('embedded_images', {})
-            temp_dir = os.path.join(os.path.dirname(filepath), '.images')
+            script_dir = os.path.dirname(filepath)
+            temp_dir = os.path.join(script_dir, '.images')
             
             image_path_map = {}
             for image_name, base64_data in embedded_images.items():
-                image_data = base64.b64decode(base64_data)
-                os.makedirs(temp_dir, exist_ok=True)
-                image_path = os.path.join(temp_dir, image_name)
-                with open(image_path, 'wb') as f:
-                    f.write(image_data)
-                image_path_map[image_name] = image_path
+                try:
+                    image_data = base64.b64decode(base64_data)
+                    os.makedirs(temp_dir, exist_ok=True)
+                    image_path = os.path.join(temp_dir, image_name)
+                    with open(image_path, 'wb') as f:
+                        f.write(image_data)
+                    image_path_map[image_name] = image_path
+                except Exception as e:
+                    print(f"[导入图片失败] {image_name}: {e}")
             
             if local_group_manager is not None:
-                local_groups = data.get('local_action_groups', {}) or data.get('action_groups', {})
+                local_groups = data.get('local_action_groups', {})
+                if not local_groups:
+                    local_groups = data.get('action_groups', {})
+                print(f"[DEBUG] 导入时从JSON读取的动作组: {list(local_groups.keys())}")
                 local_group_manager.load_from_dict(local_groups)
+                print(f"[DEBUG] 导入后 local_group_manager 中的动作组: {list(local_group_manager._groups.keys())}")
             
             actions = []
             for action_data in data.get('actions', []):
@@ -509,6 +537,16 @@ class Exporter:
                         action.params['image_path'] = image_path_map[image_name]
                 
                 actions.append(action)
+            
+            window_setup = data.get('window_setup', {})
+            if window_setup:
+                return {
+                    'actions': actions,
+                    'window_setup': window_setup,
+                    'name': data.get('name', ''),
+                    'author': data.get('author', ''),
+                    'description': data.get('description', '')
+                }
             
             return actions
         except Exception as e:

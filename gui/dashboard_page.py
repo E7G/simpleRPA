@@ -238,7 +238,7 @@ class ScriptCard(CardWidget):
         if self._item.enabled:
             self._toggle_btn.setIcon(FluentIcon.CHECKBOX)
         else:
-            self._toggle_btn.setIcon(FluentIcon.CANCEL)
+            self._toggle_btn.setIcon(FluentIcon.REMOVE)
     
     def _update_style(self):
         if self._is_running:
@@ -1099,14 +1099,21 @@ class DashboardPage(QWidget):
         self._is_running = True
         self._current_script_index = self._scripts.index(item)
         
+        self._run_btn.setEnabled(False)
+        self._stop_btn.setEnabled(True)
+        
         for card in self._script_cards:
             card.reset()
         
         self._script_cards[self._current_script_index].set_running(True)
         
         import threading
-        thread = threading.Thread(target=self._execute_script, args=(item,), daemon=True)
+        thread = threading.Thread(target=self._execute_script_with_finish, args=(item,), daemon=True)
         thread.start()
+    
+    def _execute_script_with_finish(self, item: ScriptItem):
+        self._execute_script(item)
+        self._update_finished_signal.emit(True, "")
     
     def _run_all(self):
         enabled_scripts = [s for s in self._scripts if s.enabled]

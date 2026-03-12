@@ -36,7 +36,6 @@ class Recorder:
         self.last_move_time: float = 0
         self.start_time: float = 0
         self.last_action_time: float = 0
-        self._stop_time: float = 0
         self._stopping: bool = False
         self._lock = threading.Lock()
         

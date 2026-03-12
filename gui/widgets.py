@@ -154,6 +154,7 @@ class DragCoordinateWidget(QWidget):
     def __init__(self, parent=None, title: str = "区域"):
         super().__init__(parent)
         self._title = title
+        self._region: Tuple[int, int, int, int] = (0, 0, 0, 0)
         self._setup_ui()
     
     def _setup_ui(self):
@@ -179,16 +180,18 @@ class DragCoordinateWidget(QWidget):
         self._pick_widget.show()
     
     def _on_region_captured(self, rect: QRect):
+        self._region = (rect.x(), rect.y(), rect.width(), rect.height())
         self._info_label.setText(f"区域: ({rect.x()}, {rect.y()}) {rect.width()}x{rect.height()}")
         self._info_label.setStyleSheet("")
         self.coordinates_changed.emit(rect.x(), rect.y(), rect.width(), rect.height())
     
     def set_region(self, x: int, y: int, width: int, height: int):
+        self._region = (x, y, width, height)
         self._info_label.setText(f"区域: ({x}, {y}) {width}x{height}")
         self._info_label.setStyleSheet("")
     
     def get_region(self) -> Tuple[int, int, int, int]:
-        return (0, 0, 0, 0)
+        return self._region
 
 
 class WindowSelector(QWidget):

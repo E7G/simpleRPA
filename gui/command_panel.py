@@ -143,7 +143,7 @@ class CommandCard(CardWidget):
         
         layout.addLayout(btn_layout)
         
-        self.setFixedHeight(120)
+        self.setMinimumHeight(120)
     
     def get_command_id(self) -> str:
         return self._command.id

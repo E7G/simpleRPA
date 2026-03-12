@@ -335,7 +335,6 @@ class MainWindow(FluentWindow):
             local_group_manager = self._script_editor.get_local_group_manager()
             player = Player(tab_key=route_key, local_group_manager=local_group_manager)
             player.add_callback('on_action_start', lambda a, i, rk=route_key: self._on_player_action_start_thread(a, i, rk))
-            player.add_callback('on_action_end', self._on_player_action_end)
             player.add_callback('on_progress', lambda p, i, r, rk=route_key: self._on_player_progress_thread(p, i, r, rk))
             player.add_callback('on_state_changed', lambda s, rk=route_key: self._on_player_state_changed_thread(s, rk))
             player.add_callback('on_finished', lambda s, rk=route_key: self._on_player_finished_thread(s, rk))
@@ -1013,12 +1012,6 @@ class MainWindow(FluentWindow):
         current_route_key = self._script_editor.get_current_route_key()
         if route_key == current_route_key:
             self._script_editor.set_action_running(index)
-    
-    def _on_player_action_start(self, action: Action, index: int):
-        pass
-    
-    def _on_player_action_end(self, action: Action, index: int, success: bool):
-        pass
     
     def _on_player_progress_thread(self, progress: float, action_index: int, repeat: int, route_key: str):
         self._update_progress_signal.emit(progress, action_index, repeat)

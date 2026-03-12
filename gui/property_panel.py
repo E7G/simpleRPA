@@ -43,8 +43,6 @@ class PropertyPanel(CardWidget):
     
     def set_all_actions(self, actions: List[Action]):
         self._all_actions = actions
-        if self._current_action:
-            self._refresh_condition_variables()
     
     def _collect_script_variables(self) -> Set[str]:
         variables = set()
@@ -57,9 +55,6 @@ class PropertyPanel(CardWidget):
         for var_name in var_manager.get_all().keys():
             variables.add(var_name)
         return variables
-    
-    def _refresh_condition_variables(self):
-        pass
     
     def _setup_ui(self):
         layout = QVBoxLayout(self)

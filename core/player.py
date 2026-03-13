@@ -511,6 +511,7 @@ class Player:
                 
                 if self._window_title and not action.window_title:
                     action.window_title = self._window_title
+                    action.background_mode = True
                 
                 try:
                     success = action.execute(window_offset=current_offset, should_stop=lambda: self._stop_flag, local_group_manager=self._local_group_manager)

@@ -1201,7 +1201,7 @@ class DashboardPage(QWidget):
         if not actions:
             return
         
-        player = Player(tab_key="dashboard")
+        player = Player(tab_key="dashboard", local_group_manager=local_group_manager)
         player.set_actions(actions)
         player.set_speed(self._speed_spin.value())
         player.set_repeat_count(item.repeat_count)

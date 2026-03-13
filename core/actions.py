@@ -411,12 +411,12 @@ class Action:
                     
                     if group_action.action_type in [ActionType.MOUSE_CLICK_RELATIVE, ActionType.MOUSE_MOVE_RELATIVE]:
                         group_action.use_relative_coords = True
-                        if group_action.background_mode and not group_action.window_title:
-                            group_action.window_title = self.window_title
                     
-                    if group_action.action_type in [ActionType.ACTION_GROUP_REF, ActionType.IMAGE_CLICK, ActionType.IMAGE_WAIT_CLICK, ActionType.IMAGE_CHECK]:
+                    if self.background_mode and self.window_title:
                         if not group_action.window_title:
                             group_action.window_title = self.window_title
+                        if not group_action.background_mode:
+                            group_action.background_mode = True
                     
                     group_action._is_from_group = True
                     group_action._group_name = group_name

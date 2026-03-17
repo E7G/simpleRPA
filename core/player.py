@@ -583,7 +583,7 @@ class Player:
         self._emit('on_action_start', action, index)
         
         try:
-            success = action.execute(window_offset=current_offset, should_stop=lambda: self._stop_flag)
+            success = action.execute(window_offset=current_offset, should_stop=lambda: self._stop_flag, local_group_manager=self._local_group_manager)
             self._emit('on_action_end', action, index, success)
             
             if adjusted_delay_after > 0:

@@ -7,13 +7,18 @@ import os
 
 class PreviewOverlay(QWidget):
     _instance = None
-    _initialized = False
     
     @classmethod
     def get_instance(cls, duration: int = 2000):
         if cls._instance is None:
             cls._instance = PreviewOverlay(duration)
         else:
+            try:
+                cls._instance.isVisible()
+            except RuntimeError:
+                cls._instance = PreviewOverlay(duration)
+                return cls._instance
+            
             cls._instance._duration = duration
             cls._instance._preview_type = None
             cls._instance._preview_data = {}
@@ -22,9 +27,6 @@ class PreviewOverlay(QWidget):
         return cls._instance
     
     def __init__(self, duration: int = 2000):
-        if PreviewOverlay._initialized:
-            return
-        
         super().__init__()
         
         self._duration = duration
@@ -46,7 +48,6 @@ class PreviewOverlay(QWidget):
         self._blink_count = 0
         
         self._setup_geometry()
-        PreviewOverlay._initialized = True
     
     def _setup_geometry(self):
         screens = QGuiApplication.screens()

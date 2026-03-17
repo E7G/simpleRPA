@@ -36,10 +36,14 @@ class PropertyPanel(CardWidget):
         self._preview_timer = QTimer(self)
         self._preview_timer.timeout.connect(self._preview_next_in_queue)
         self._var_values: List[str] = []
+        self._local_group_manager = None
         self._setup_ui()
     
     def set_window_offset(self, offset: Optional[Tuple[int, int]]):
         self._window_offset = offset
+    
+    def set_local_group_manager(self, manager):
+        self._local_group_manager = manager
     
     def set_all_actions(self, actions: List[Action]):
         self._all_actions = actions
@@ -614,11 +618,10 @@ class PropertyPanel(CardWidget):
     
     def _queue_action_preview(self, action: Action):
         if action.action_type == ActionType.ACTION_GROUP_REF:
-            from core.action_group import ActionGroupManager
+            from core.action_group import ensure_action_group_available
             group_name = action.params.get('group_name', '')
             if group_name:
-                group_manager = ActionGroupManager.get_instance()
-                group = group_manager.get_group(group_name)
+                group = ensure_action_group_available(group_name, self._local_group_manager)
                 if group:
                     for group_action in group.actions:
                         self._queue_action_preview(group_action)
@@ -634,7 +637,7 @@ class PropertyPanel(CardWidget):
         self._show_single_preview(action)
         
         if self._preview_queue:
-            self._preview_timer.start(500)
+            self._preview_timer.start(2500)
     
     def _show_single_preview(self, action: Action):
         if self._preview_overlay is None:

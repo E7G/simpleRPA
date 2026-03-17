@@ -839,8 +839,14 @@ class MainWindow(FluentWindow):
         self._progress_bar.setVisible(True)
         self._progress_bar.setValue(0)
         
+        total_actions = len(actions)
+        repeat_count = player.repeat_count
+        if player.infinite_loop:
+            self._status_label.setText(f"开始执行 {total_actions} 个动作 (无限循环)...")
+        else:
+            self._status_label.setText(f"开始执行 {total_actions} 个动作，共 {repeat_count} 轮...")
+        
         player.play()
-        self._status_label.setText("正在执行...")
     
     def _on_infinite_changed(self, state):
         is_infinite = state == Qt.Checked
@@ -868,10 +874,15 @@ class MainWindow(FluentWindow):
         new_state = player.toggle_pause()
         if new_state == PlayerState.PAUSED:
             self._pause_btn.setText("继续")
-            self._status_label.setText("已暂停")
+            total_actions = len(player.actions)
+            self._status_label.setText(f"已暂停 | 当前进度: 动作 {player.current_index + 1}/{total_actions}")
         elif new_state == PlayerState.PLAYING:
             self._pause_btn.setText("暂停")
-            self._status_label.setText("正在执行...")
+            total_actions = len(player.actions)
+            if player.infinite_loop:
+                self._status_label.setText(f"继续执行 | 第 {player.current_repeat} 轮 | 动作 {player.current_index + 1}/{total_actions}")
+            else:
+                self._status_label.setText(f"继续执行 | 第 {player.current_repeat}/{player.repeat_count} 轮 | 动作 {player.current_index + 1}/{total_actions}")
     
     def _stop_script(self):
         current_tab = self._script_editor._get_current_tab()
@@ -899,6 +910,7 @@ class MainWindow(FluentWindow):
     def _on_action_selected(self, action: Action):
         index = self._script_editor.get_selected_index()
         self._property_panel.set_action(action, index)
+        self._property_panel.set_local_group_manager(self._script_editor.get_local_group_manager())
     
     def _on_actions_changed(self):
         self._set_current_tab_modified(True)
@@ -1031,11 +1043,12 @@ class MainWindow(FluentWindow):
     def _on_player_progress(self, progress: float, action_index: int, repeat: int):
         player = self._get_current_player()
         if player:
+            total_actions = len(player.actions)
             if player.infinite_loop:
-                self._status_label.setText(f"正在执行... 第 {repeat} 轮")
+                self._status_label.setText(f"执行中: 第 {repeat} 轮 | 动作 {action_index + 1}/{total_actions}")
             else:
                 total = player.repeat_count
-                self._status_label.setText(f"正在执行... 第 {repeat}/{total} 轮")
+                self._status_label.setText(f"执行中: 第 {repeat}/{total} 轮 | 动作 {action_index + 1}/{total_actions}")
         
         if progress >= 0:
             self._progress_bar.setValue(int(progress))
@@ -1052,7 +1065,12 @@ class MainWindow(FluentWindow):
                 self._script_editor.clear_all_running()
             elif state == PlayerState.PAUSED:
                 self._pause_btn.setText("继续")
-                self._status_label.setText("已暂停")
+                player = self._get_current_player()
+                if player:
+                    total_actions = len(player.actions)
+                    self._status_label.setText(f"已暂停 | 当前进度: 动作 {player.current_index + 1}/{total_actions}")
+                else:
+                    self._status_label.setText("已暂停")
             elif state == PlayerState.PLAYING:
                 self._pause_btn.setText("暂停")
             elif state == PlayerState.STOPPED:
@@ -1066,10 +1084,23 @@ class MainWindow(FluentWindow):
         
         if route_key == current_route_key:
             self._progress_bar.setVisible(False)
+            player = self._get_current_player()
             if success:
-                self._status_label.setText("执行完成")
+                if player:
+                    total_actions = len(player.actions)
+                    total_repeats = player.current_repeat
+                    self._status_label.setText(f"执行完成 | 共 {total_actions} 个动作，{total_repeats} 轮")
+                    from utils.notification import send_notification
+                    send_notification("SimpleRPA 执行完成", f"已完成 {total_actions} 个动作，共 {total_repeats} 轮")
+                else:
+                    self._status_label.setText("执行完成")
+                    from utils.notification import send_notification
+                    send_notification("SimpleRPA 执行完成", "脚本执行完成")
             else:
-                self._status_label.setText("执行中断")
+                if player:
+                    self._status_label.setText(f"执行中断 | 已完成 {player.current_index} 个动作")
+                else:
+                    self._status_label.setText("执行中断")
             
             self._run_btn.setEnabled(True)
             self._pause_btn.setEnabled(False)

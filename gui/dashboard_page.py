@@ -1201,24 +1201,30 @@ class DashboardPage(QWidget):
         if not actions:
             return
         
-        player = Player(tab_key="dashboard", local_group_manager=local_group_manager)
-        player.set_actions(actions)
-        player.set_speed(self._speed_spin.value())
-        player.set_repeat_count(item.repeat_count)
+        self._player = Player(tab_key="dashboard", local_group_manager=local_group_manager)
+        self._player.set_actions(actions)
+        self._player.set_speed(self._speed_spin.value())
+        self._player.set_repeat_count(item.repeat_count)
         
         if selected_hwnd:
-            player.set_window_hwnd(selected_hwnd, self._window_utils)
+            self._player.set_window_hwnd(selected_hwnd, self._window_utils)
             window_offset = self._window_selector.get_window_offset()
-            player.set_window_offset(window_offset)
+            self._player.set_window_offset(window_offset)
         
         if window_title:
-            player.set_window_title(window_title)
+            self._player.set_window_title(window_title)
         
-        player.play()
+        total_actions = len(actions)
+        if self._player.infinite_loop:
+            self._status_label.setText(f"开始执行 {total_actions} 个动作 (无限循环)...")
+        else:
+            self._status_label.setText(f"开始执行 {total_actions} 个动作，共 {item.repeat_count} 轮...")
         
-        while player.state not in [PlayerState.IDLE]:
+        self._player.play()
+        
+        while self._player.state not in [PlayerState.IDLE]:
             if not self._is_running:
-                player.stop()
+                self._player.stop()
                 break
             time.sleep(0.1)
     
@@ -1261,6 +1267,14 @@ class DashboardPage(QWidget):
             self._progress_bar.setValue(int(progress * 100))
             self._progress_card.set_value(f"{int(progress * 100)}%")
         self._repeat_card.set_value(str(repeat))
+        
+        if self._player:
+            total_actions = len(self._player.actions)
+            if self._player.infinite_loop:
+                self._status_label.setText(f"执行中: 第 {repeat} 轮 | 动作 {index + 1}/{total_actions}")
+            else:
+                total = self._player.repeat_count
+                self._status_label.setText(f"执行中: 第 {repeat}/{total} 轮 | 动作 {index + 1}/{total_actions}")
     
     def _on_state_changed(self, state, message):
         if state == PlayerState.IDLE:
@@ -1274,12 +1288,24 @@ class DashboardPage(QWidget):
         self._progress_bar.setVisible(False)
         
         if success:
-            self._status_label.setText("执行完成")
+            if self._player:
+                total_actions = len(self._player.actions)
+                total_repeats = self._player.current_repeat
+                self._status_label.setText(f"执行完成 | 共 {total_actions} 个动作，{total_repeats} 轮")
+                from utils.notification import send_notification
+                send_notification("SimpleRPA 执行完成", f"已完成 {total_actions} 个动作，共 {total_repeats} 轮")
+            else:
+                self._status_label.setText("执行完成")
+                from utils.notification import send_notification
+                send_notification("SimpleRPA 执行完成", "脚本执行完成")
             self._status_icon.setIcon(FluentIcon.COMPLETED)
             for card in self._script_cards:
                 card.reset()
         else:
-            self._status_label.setText("已停止")
+            if self._player:
+                self._status_label.setText(f"已停止 | 已完成 {self._player.current_index} 个动作")
+            else:
+                self._status_label.setText("已停止")
             self._status_icon.setIcon(FluentIcon.STOP_WATCH)
     
     def _show_info(self, message: str):

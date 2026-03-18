@@ -61,32 +61,168 @@ class ScriptItem:
 
 
 class SubActionRow(QWidget):
-    def __init__(self, action: Action, index: int, depth: int = 0, parent=None):
+    def __init__(self, action: Action, index: int, depth: int = 0, parent=None, local_group_manager=None):
         super().__init__(parent)
         self._action = action
         self._index = index
         self._depth = depth
+        self._is_running = False
+        self._is_completed = False
+        self._expanded = False
+        self._sub_widgets: List[QWidget] = []
+        self._local_group_manager = local_group_manager
+        self._repeat_count = action.repeat_count or 1
+        self._current_repeat = 0
+        self._sub_action_index = -1
         self._setup_ui()
     
     def _setup_ui(self):
-        layout = QHBoxLayout(self)
-        layout.setContentsMargins(self._depth * 16 + 12, 4, 8, 4)
-        layout.setSpacing(6)
+        self._main_layout = QVBoxLayout(self)
+        self._main_layout.setContentsMargins(0, 0, 0, 0)
+        self._main_layout.setSpacing(0)
+        
+        header = QWidget()
+        header_layout = QHBoxLayout(header)
+        header_layout.setContentsMargins(self._depth * 16 + 12, 4, 8, 4)
+        header_layout.setSpacing(6)
         
         self._index_label = CaptionLabel(f"{self._index + 1}")
         self._index_label.setFixedWidth(16)
         self._index_label.setStyleSheet("color: #888;")
-        layout.addWidget(self._index_label)
+        header_layout.addWidget(self._index_label)
         
-        icon = ACTION_ICONS.get(self._action.action_type, FluentIcon.PLAY)
-        self._icon = IconWidget(icon, self)
-        self._icon.setFixedSize(12, 12)
-        layout.addWidget(self._icon)
+        is_action_group = self._action.action_type == ActionType.ACTION_GROUP_REF
         
-        self._desc_label = CaptionLabel(self._action.description[:40])
-        layout.addWidget(self._desc_label, 1)
+        if is_action_group:
+            self._expand_btn = TransparentToolButton(FluentIcon.CARE_RIGHT_SOLID)
+            self._expand_btn.setFixedSize(16, 16)
+            self._expand_btn.clicked.connect(self._toggle_expand)
+            header_layout.addWidget(self._expand_btn)
+        else:
+            icon = ACTION_ICONS.get(self._action.action_type, FluentIcon.PLAY)
+            self._icon = IconWidget(icon, self)
+            self._icon.setFixedSize(12, 12)
+            header_layout.addWidget(self._icon)
         
-        self.setFixedHeight(24)
+        desc_text = self._action.description[:40]
+        if is_action_group and self._repeat_count > 1:
+            desc_text = f"{desc_text} (x{self._repeat_count})"
+        self._desc_label = CaptionLabel(desc_text)
+        header_layout.addWidget(self._desc_label, 1)
+        
+        self._status_label = CaptionLabel("")
+        self._status_label.setFixedWidth(40)
+        header_layout.addWidget(self._status_label)
+        
+        self._main_layout.addWidget(header)
+        
+        self._sub_container = QWidget()
+        self._sub_container.setVisible(False)
+        self._sub_layout = QVBoxLayout(self._sub_container)
+        self._sub_layout.setContentsMargins(0, 0, 0, 0)
+        self._sub_layout.setSpacing(0)
+        self._main_layout.addWidget(self._sub_container)
+        
+        header.setFixedHeight(24)
+    
+    def _toggle_expand(self):
+        self._expanded = not self._expanded
+        if self._expanded:
+            self._expand_btn.setIcon(FluentIcon.CARE_DOWN_SOLID)
+            self._build_sub_actions()
+            self._sub_container.setVisible(True)
+        else:
+            self._expand_btn.setIcon(FluentIcon.CARE_RIGHT_SOLID)
+            self._sub_container.setVisible(False)
+    
+    def _build_sub_actions(self):
+        for w in self._sub_widgets:
+            w.deleteLater()
+        self._sub_widgets.clear()
+        
+        if self._action.action_type != ActionType.ACTION_GROUP_REF:
+            return
+        
+        group_name = self._action.params.get('group_name', '')
+        if not group_name:
+            return
+        
+        from core.action_group import ensure_action_group_available
+        group = ensure_action_group_available(group_name, self._local_group_manager)
+        if not group:
+            return
+        
+        for i, sub_action in enumerate(group.actions[:30]):
+            w = SubActionRow(sub_action, i, depth=self._depth + 1, local_group_manager=self._local_group_manager)
+            self._sub_widgets.append(w)
+            self._sub_layout.addWidget(w)
+        
+        if len(group.actions) > 30:
+            more_label = CaptionLabel(f"... 还有 {len(group.actions) - 30} 个动作")
+            more_label.setStyleSheet("color: #888; padding-left: 28px;")
+            self._sub_layout.addWidget(more_label)
+    
+    def expand_if_needed(self):
+        if not self._expanded and self._action.action_type == ActionType.ACTION_GROUP_REF:
+            self._toggle_expand()
+    
+    def set_running(self, running: bool, repeat: int = 0, sub_index: int = -1):
+        self._is_running = running
+        self._is_completed = False
+        self._current_repeat = repeat
+        self._sub_action_index = sub_index
+        
+        if running:
+            if self._action.action_type == ActionType.ACTION_GROUP_REF:
+                if self._repeat_count > 1:
+                    self._status_label.setText(f"▶R{repeat}/{self._repeat_count}")
+                else:
+                    self._status_label.setText("▶")
+                self._status_label.setStyleSheet("color: #0078D4; font-weight: bold;")
+                self.setStyleSheet("background-color: rgba(0, 120, 212, 0.1);")
+                
+                if sub_index >= 0 and sub_index < len(self._sub_widgets):
+                    self.expand_if_needed()
+                    for i, w in enumerate(self._sub_widgets):
+                        if hasattr(w, 'set_running'):
+                            if i == sub_index:
+                                w.set_running(True)
+                            elif i < sub_index:
+                                w.set_completed(True)
+                            else:
+                                w.reset()
+            else:
+                self._status_label.setText("▶")
+                self._status_label.setStyleSheet("color: #0078D4; font-weight: bold;")
+                self.setStyleSheet("background-color: rgba(0, 120, 212, 0.1);")
+        else:
+            self._status_label.setText("")
+            self.setStyleSheet("")
+    
+    def set_completed(self, completed: bool):
+        self._is_completed = completed
+        self._is_running = False
+        if completed:
+            self._status_label.setText("✓")
+            self._status_label.setStyleSheet("color: #16a34a; font-weight: bold;")
+            self.setStyleSheet("background-color: rgba(22, 163, 74, 0.05);")
+            for w in self._sub_widgets:
+                if hasattr(w, 'set_completed'):
+                    w.set_completed(True)
+        else:
+            self._status_label.setText("")
+            self.setStyleSheet("")
+    
+    def reset(self):
+        self._is_running = False
+        self._is_completed = False
+        self._current_repeat = 0
+        self._sub_action_index = -1
+        self._status_label.setText("")
+        self.setStyleSheet("")
+        for w in self._sub_widgets:
+            if hasattr(w, 'reset'):
+                w.reset()
 
 
 class ScriptCard(CardWidget):
@@ -96,7 +232,7 @@ class ScriptCard(CardWidget):
     move_down_requested = pyqtSignal(str)
     toggle_enabled = pyqtSignal(str, bool)
     
-    def __init__(self, item: ScriptItem, index: int, parent=None):
+    def __init__(self, item: ScriptItem, index: int, parent=None, local_group_manager=None):
         super().__init__(parent)
         self._item = item
         self._index = index
@@ -104,6 +240,7 @@ class ScriptCard(CardWidget):
         self._sub_widgets: List[QWidget] = []
         self._is_running = False
         self._is_completed = False
+        self._local_group_manager = local_group_manager
         self._setup_ui()
     
     def _setup_ui(self):
@@ -219,7 +356,7 @@ class ScriptCard(CardWidget):
             return
         
         for i, action in enumerate(self._item.actions[:50]):
-            w = SubActionRow(action, i, depth=1)
+            w = SubActionRow(action, i, depth=1, local_group_manager=self._local_group_manager)
             self._sub_widgets.append(w)
             self._sub_layout.addWidget(w)
         
@@ -275,6 +412,36 @@ class ScriptCard(CardWidget):
         self._is_completed = False
         self._status_label.setVisible(False)
         self._update_style()
+        for w in self._sub_widgets:
+            if hasattr(w, 'reset'):
+                w.reset()
+    
+    def set_sub_action_running(self, action_index: int, repeat: int = 0, sub_index: int = -1):
+        for i, w in enumerate(self._sub_widgets):
+            if hasattr(w, 'set_running') and hasattr(w, 'set_completed'):
+                if i == action_index:
+                    w.set_running(True, repeat=repeat, sub_index=sub_index)
+                elif i < action_index:
+                    w.set_completed(True)
+                else:
+                    w.reset()
+    
+    def set_sub_action_completed(self, action_index: int):
+        for i, w in enumerate(self._sub_widgets):
+            if hasattr(w, 'set_completed'):
+                if i <= action_index:
+                    w.set_completed(True)
+                else:
+                    w.reset()
+    
+    def set_local_group_manager(self, manager):
+        self._local_group_manager = manager
+        if self._expanded:
+            self._build_sub_widgets()
+    
+    def expand_if_needed(self):
+        if not self._expanded:
+            self._toggle_expand()
 
 
 class StatCard(CardWidget):
@@ -1206,6 +1373,14 @@ class DashboardPage(QWidget):
         self._player.set_speed(self._speed_spin.value())
         self._player.set_repeat_count(item.repeat_count)
         
+        self._player.add_callback('on_action_start', self._on_action_start)
+        self._player.add_callback('on_action_end', self._on_action_end)
+        self._player.add_callback('on_sub_action_start', self._on_sub_action_start)
+        self._player.add_callback('on_sub_action_end', self._on_sub_action_end)
+        
+        if self._current_script_index >= 0 and self._current_script_index < len(self._script_cards):
+            self._script_cards[self._current_script_index].set_local_group_manager(local_group_manager)
+        
         if selected_hwnd:
             self._player.set_window_hwnd(selected_hwnd, self._window_utils)
             window_offset = self._window_selector.get_window_offset()
@@ -1276,6 +1451,60 @@ class DashboardPage(QWidget):
                 total = self._player.repeat_count
                 self._status_label.setText(f"执行中: 第 {repeat}/{total} 轮 | 动作 {index + 1}/{total_actions}")
     
+    def _on_action_start(self, action, index):
+        if self._current_script_index >= 0 and self._current_script_index < len(self._script_cards):
+            card = self._script_cards[self._current_script_index]
+            card.expand_if_needed()
+            
+            repeat = 0
+            sub_index = -1
+            if action.action_type == ActionType.ACTION_GROUP_REF:
+                repeat = getattr(action, '_current_repeat', 1) or 1
+            
+            card.set_sub_action_running(index, repeat=repeat, sub_index=sub_index)
+            
+            action_desc = action.description[:30]
+            total_actions = len(self._player.actions) if self._player else 0
+            if self._player and self._player.infinite_loop:
+                self._status_label.setText(f"执行中: {action_desc} | 动作 {index + 1}/{total_actions}")
+            elif self._player:
+                total = self._player.repeat_count
+                repeat = self._player.current_repeat
+                self._status_label.setText(f"第 {repeat}/{total} 轮 | {action_desc} | 动作 {index + 1}/{total_actions}")
+    
+    def _on_action_end(self, action, index, success):
+        if self._current_script_index >= 0 and self._current_script_index < len(self._script_cards):
+            card = self._script_cards[self._current_script_index]
+            card.set_sub_action_completed(index)
+    
+    def _on_sub_action_start(self, parent_action, parent_index, sub_action, sub_index, indices):
+        if self._current_script_index >= 0 and self._current_script_index < len(self._script_cards):
+            card = self._script_cards[self._current_script_index]
+            card.expand_if_needed()
+            
+            current_repeat = getattr(parent_action, '_current_repeat', 1) or 1
+            
+            if len(indices) == 1:
+                card.set_sub_action_running(parent_index, repeat=current_repeat, sub_index=sub_index)
+            elif len(indices) > 1:
+                pass
+            
+            sub_desc = sub_action.description[:25]
+            group_name = parent_action.params.get('group_name', '') if parent_action.action_type == ActionType.ACTION_GROUP_REF else ''
+            total_actions = len(self._player.actions) if self._player else 0
+            
+            if group_name:
+                repeat_count = parent_action.repeat_count or 1
+                if self._player and self._player.infinite_loop:
+                    self._status_label.setText(f"[{group_name}] R{current_repeat}/{repeat_count} | {sub_desc}")
+                elif self._player:
+                    total = self._player.repeat_count
+                    repeat = self._player.current_repeat
+                    self._status_label.setText(f"第 {repeat}/{total} 轮 | [{group_name}] R{current_repeat}/{repeat_count} | {sub_desc}")
+    
+    def _on_sub_action_end(self, parent_action, parent_index, sub_action, sub_index, indices, success):
+        pass
+    
     def _on_state_changed(self, state, message):
         if state == PlayerState.IDLE:
             self._run_btn.setEnabled(True)
@@ -1296,8 +1525,6 @@ class DashboardPage(QWidget):
                 send_notification("SimpleRPA 执行完成", f"已完成 {total_actions} 个动作，共 {total_repeats} 轮")
             else:
                 self._status_label.setText("执行完成")
-                from utils.notification import send_notification
-                send_notification("SimpleRPA 执行完成", "脚本执行完成")
             self._status_icon.setIcon(FluentIcon.COMPLETED)
             for card in self._script_cards:
                 card.reset()

@@ -1018,8 +1018,24 @@ class MainWindow(FluentWindow):
         player = self._tab_players.get(route_key)
         if player:
             total_actions = len(player.actions)
-            desc = action.description[:50] + "..." if len(action.description) > 50 else action.description
-            self._status_label.setText(f"执行动作 {index + 1}/{total_actions}: {desc}")
+            desc = action.description[:40] + "..." if len(action.description) > 40 else action.description
+            
+            if action.action_type == ActionType.ACTION_GROUP_REF:
+                group_name = action.params.get('group_name', '')
+                repeat_count = action.repeat_count or 1
+                if player.infinite_loop:
+                    self._status_label.setText(f"动作组 [{group_name}] x{repeat_count} | 动作 {index + 1}/{total_actions}")
+                else:
+                    repeat = player.current_repeat
+                    total = player.repeat_count
+                    self._status_label.setText(f"第 {repeat}/{total} 轮 | 动作组 [{group_name}] x{repeat_count} | 动作 {index + 1}/{total_actions}")
+            else:
+                if player.infinite_loop:
+                    self._status_label.setText(f"{desc} | 动作 {index + 1}/{total_actions}")
+                else:
+                    repeat = player.current_repeat
+                    total = player.repeat_count
+                    self._status_label.setText(f"第 {repeat}/{total} 轮 | {desc} | 动作 {index + 1}/{total_actions}")
         
         current_route_key = self._script_editor.get_current_route_key()
         if route_key == current_route_key:

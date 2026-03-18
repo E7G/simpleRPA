@@ -509,9 +509,11 @@ class Player:
                 action._on_nested_sub_action_start = on_nested_sub_action_start
                 action._on_nested_sub_action_end = on_nested_sub_action_end
                 
-                if self._window_title and not action.window_title:
-                    action.window_title = self._window_title
-                    action.background_mode = True
+                if self._window_title:
+                    if not action.window_title:
+                        action.window_title = self._window_title
+                    if action.background_mode and not action.window_title:
+                        action.window_title = self._window_title
                 
                 try:
                     success = action.execute(window_offset=current_offset, should_stop=lambda: self._stop_flag, local_group_manager=self._local_group_manager)

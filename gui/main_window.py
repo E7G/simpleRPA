@@ -414,12 +414,24 @@ class MainWindow(FluentWindow):
     
     def _load_settings(self):
         geometry = self._config.window_geometry
-        self.setGeometry(
-            geometry.get('x', 100),
-            geometry.get('y', 100),
-            geometry.get('width', 1280),
-            geometry.get('height', 850)
-        )
+        x = geometry.get('x', 100)
+        y = geometry.get('y', 100)
+        width = geometry.get('width', 1280)
+        height = geometry.get('height', 850)
+        
+        screen = QApplication.primaryScreen()
+        if screen:
+            screen_geometry = screen.availableGeometry()
+            if x < screen_geometry.left() - 100 or x > screen_geometry.right() - 100:
+                x = 100
+            if y < screen_geometry.top() - 50 or y > screen_geometry.bottom() - 100:
+                y = 100
+            if width > screen_geometry.width():
+                width = min(width, screen_geometry.width() - 100)
+            if height > screen_geometry.height():
+                height = min(height, screen_geometry.height() - 100)
+        
+        self.setGeometry(x, y, width, height)
         
         if self._config.bound_window:
             self._window_selector.set_selected_window(

@@ -401,56 +401,45 @@ class Action:
                     if not group:
                         raise Exception(f"动作组不存在: {group_name}")
                 
-                repeat_count = self.repeat_count or 1
                 self._sub_actions = []
                 
-                for repeat_num in range(1, repeat_count + 1):
+                for sub_index, group_action in enumerate(group.actions):
                     if should_stop and should_stop():
                         return False
+                    if not group_action.check_condition():
+                        print(f"[条件跳过] {group_action.description} - 条件不满足: {group_action.condition}")
+                        continue
                     
-                    self._current_repeat = repeat_num
+                    if group_action.action_type in [ActionType.MOUSE_CLICK_RELATIVE, ActionType.MOUSE_MOVE_RELATIVE]:
+                        group_action.use_relative_coords = True
                     
-                    for sub_index, group_action in enumerate(group.actions):
-                        if should_stop and should_stop():
-                            return False
-                        if not group_action.check_condition():
-                            print(f"[条件跳过] {group_action.description} - 条件不满足: {group_action.condition}")
-                            continue
-                        
-                        if group_action.action_type in [ActionType.MOUSE_CLICK_RELATIVE, ActionType.MOUSE_MOVE_RELATIVE]:
-                            group_action.use_relative_coords = True
-                        
-                        if self.background_mode and self.window_title:
-                            if not group_action.window_title:
-                                group_action.window_title = self.window_title
-                        
-                        if group_action.background_mode and not group_action.window_title and self.window_title:
-                            group_action.window_title = self.window_title
-                        
-                        group_action._is_from_group = True
-                        group_action._group_name = group_name
-                        group_action._sub_index = sub_index
-                        group_action._current_repeat = repeat_num
-                        self._sub_actions.append(group_action)
-                        
-                        if hasattr(self, '_on_sub_action_start') and self._on_sub_action_start:
-                            self._on_sub_action_start(group_action, sub_index)
-                        
-                        def on_nested_sub_start(nested_action, nested_index):
-                            if hasattr(self, '_on_nested_sub_action_start') and self._on_nested_sub_action_start:
-                                self._on_nested_sub_action_start(sub_index, nested_action, nested_index)
-                        
-                        def on_nested_sub_end(nested_action, nested_index, success):
-                            if hasattr(self, '_on_nested_sub_action_end') and self._on_nested_sub_action_end:
-                                self._on_nested_sub_action_end(sub_index, nested_action, nested_index, success)
-                        
-                        group_action._on_sub_action_start = on_nested_sub_start
-                        group_action._on_sub_action_end = on_nested_sub_end
-                        
-                        group_action.execute(window_offset=window_offset, should_stop=should_stop, local_group_manager=local_group_manager)
-                        
-                        if hasattr(self, '_on_sub_action_end') and self._on_sub_action_end:
-                            self._on_sub_action_end(group_action, sub_index, True)
+                    if self.window_title and not group_action.window_title:
+                        group_action.window_title = self.window_title
+                    
+                    group_action._is_from_group = True
+                    group_action._group_name = group_name
+                    group_action._sub_index = sub_index
+                    group_action._current_repeat = 1
+                    self._sub_actions.append(group_action)
+                    
+                    if hasattr(self, '_on_sub_action_start') and self._on_sub_action_start:
+                        self._on_sub_action_start(group_action, sub_index)
+                    
+                    def on_nested_sub_start(nested_action, nested_index):
+                        if hasattr(self, '_on_nested_sub_action_start') and self._on_nested_sub_action_start:
+                            self._on_nested_sub_action_start(sub_index, nested_action, nested_index)
+                    
+                    def on_nested_sub_end(nested_action, nested_index, success):
+                        if hasattr(self, '_on_nested_sub_action_end') and self._on_nested_sub_action_end:
+                            self._on_nested_sub_action_end(sub_index, nested_action, nested_index, success)
+                    
+                    group_action._on_sub_action_start = on_nested_sub_start
+                    group_action._on_sub_action_end = on_nested_sub_end
+                    
+                    group_action.execute(window_offset=window_offset, should_stop=should_stop, local_group_manager=local_group_manager)
+                    
+                    if hasattr(self, '_on_sub_action_end') and self._on_sub_action_end:
+                        self._on_sub_action_end(group_action, sub_index, True)
             
             time.sleep(self.delay_after)
             return True

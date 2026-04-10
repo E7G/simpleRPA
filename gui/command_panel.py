@@ -11,7 +11,7 @@ from qfluentwidgets import (
     PushButton, PrimaryPushButton, LineEdit, TransparentToolButton, 
     FluentIcon, InfoBar, InfoBarPosition, MessageBox, IconWidget,
     SubtitleLabel, CaptionLabel, ScrollArea, SimpleCardWidget,
-    TitleLabel, isDarkTheme, themeColor, HeaderCardWidget
+    TitleLabel, isDarkTheme, themeColor, HeaderCardWidget, DoubleSpinBox
 )
 
 from core.command_manager import CommandManager, LaunchCommand
@@ -150,13 +150,17 @@ class CommandCard(CardWidget):
 
 
 class FormCard(CardWidget):
-    save_requested = pyqtSignal(str, str, str, str)
+    save_requested = pyqtSignal(str, str, str, str, float)
     cancel_requested = pyqtSignal()
     pick_window_requested = pyqtSignal()
+    test_command_requested = pyqtSignal()
     
     def __init__(self, parent=None):
         super().__init__(parent)
         self._editing_id: Optional[str] = None
+        self._timer_seconds = 0.0
+        self._timer_active = False
+        self._test_process = None
         self._setup_ui()
     
     def _setup_ui(self):
@@ -223,6 +227,28 @@ class FormCard(CardWidget):
         window_row.addWidget(self._pick_btn)
         form_layout.addLayout(window_row)
         
+        delay_row = QHBoxLayout()
+        delay_label = BodyLabel("启动延迟")
+        delay_label.setFixedWidth(100)
+        delay_row.addWidget(delay_label)
+        
+        self._delay_spin = DoubleSpinBox()
+        self._delay_spin.setRange(0, 300)
+        self._delay_spin.setValue(0)
+        self._delay_spin.setSingleStep(0.5)
+        self._delay_spin.setSuffix(" 秒")
+        self._delay_spin.setMinimumHeight(44)
+        self._delay_spin.setFixedWidth(120)
+        delay_row.addWidget(self._delay_spin)
+        
+        self._test_btn = PrimaryPushButton(FluentIcon.PLAY, "测试并计时")
+        self._test_btn.setFixedHeight(44)
+        self._test_btn.clicked.connect(self._test_command)
+        delay_row.addWidget(self._test_btn)
+        
+        delay_row.addStretch()
+        form_layout.addLayout(delay_row)
+        
         desc_row = QHBoxLayout()
         desc_label = BodyLabel("描述")
         desc_label.setFixedWidth(100)
@@ -236,7 +262,7 @@ class FormCard(CardWidget):
         
         layout.addLayout(form_layout)
         
-        tip_label = StrongBodyLabel("提示：点击\"拾取\"按钮可自动获取窗口信息")
+        tip_label = StrongBodyLabel("提示：点击\"测试并计时\"按钮会执行命令并开始计时，停止后自动填入延迟时间")
         tip_label.setStyleSheet("color: #888;")
         layout.addWidget(tip_label)
         
@@ -249,13 +275,55 @@ class FormCard(CardWidget):
         btn_layout.addWidget(self._save_btn)
         
         layout.addLayout(btn_layout)
+        
+        self._timer = QTimer(self)
+        self._timer.timeout.connect(self._update_timer)
+    
+    def _test_command(self):
+        command = self._cmd_edit.text().strip()
+        if not command:
+            InfoBar.warning(
+                title="请输入命令",
+                content="请先输入启动命令",
+                parent=self,
+                position=InfoBarPosition.TOP
+            )
+            return
+        
+        if self._timer_active:
+            self._timer.stop()
+            self._timer_active = False
+            self._test_btn.setText("测试并计时")
+        
+        self._timer_seconds = 0.0
+        self._test_process = subprocess.Popen(command, shell=True)
+        self._timer_active = True
+        self._test_btn.setText("停止")
+        self._timer.start(100)
+    
+    def _update_timer(self):
+        self._timer_seconds += 0.1
+    
+    def _stop_timer(self):
+        if self._timer_active:
+            self._timer.stop()
+            self._timer_active = False
+            self._delay_spin.setValue(self._timer_seconds)
+            self._test_btn.setText("测试并计时")
+            InfoBar.success(
+                title="计时完成",
+                content=f"已记录延迟时间: {self._timer_seconds:.1f} 秒",
+                parent=self,
+                position=InfoBarPosition.TOP
+            )
     
     def _on_save(self):
         name = self._name_edit.text().strip()
         command = self._cmd_edit.text().strip()
         pattern = self._window_edit.text().strip()
         description = self._desc_edit.text().strip()
-        self.save_requested.emit(name, command, pattern, description)
+        delay = self._delay_spin.value()
+        self.save_requested.emit(name, command, pattern, description, delay)
     
     def set_editing(self, cmd: LaunchCommand):
         self._editing_id = cmd.id
@@ -265,6 +333,7 @@ class FormCard(CardWidget):
         self._cmd_edit.setText(cmd.command)
         self._window_edit.setText(cmd.window_title_pattern)
         self._desc_edit.setText(cmd.description)
+        self._delay_spin.setValue(cmd.delay_after_launch)
     
     def set_adding(self):
         self._editing_id = None
@@ -274,6 +343,7 @@ class FormCard(CardWidget):
         self._cmd_edit.clear()
         self._window_edit.clear()
         self._desc_edit.clear()
+        self._delay_spin.setValue(0)
     
     def get_editing_id(self) -> Optional[str]:
         return self._editing_id
@@ -283,7 +353,12 @@ class FormCard(CardWidget):
         self._cmd_edit.clear()
         self._window_edit.clear()
         self._desc_edit.clear()
+        self._delay_spin.setValue(0)
         self._editing_id = None
+        if self._timer_active:
+            self._timer.stop()
+            self._timer_active = False
+            self._test_btn.setText("测试并计时")
 
 
 class CommandManagerWidget(QWidget):
@@ -495,7 +570,7 @@ class CommandManagerWidget(QWidget):
         except:
             return ""
     
-    def _save_command(self, name: str, command: str, pattern: str, description: str):
+    def _save_command(self, name: str, command: str, pattern: str, description: str, delay: float):
         if not name:
             InfoBar.warning(
                 title="请输入名称",
@@ -522,7 +597,8 @@ class CommandManagerWidget(QWidget):
                 name=name,
                 command=command,
                 window_title_pattern=pattern,
-                description=description
+                description=description,
+                delay_after_launch=delay
             )
             if success:
                 InfoBar.success(
@@ -532,7 +608,7 @@ class CommandManagerWidget(QWidget):
                     position=InfoBarPosition.TOP
                 )
         else:
-            cmd = self._command_manager.add_command(name, command, pattern, description)
+            cmd = self._command_manager.add_command(name, command, pattern, description, delay)
             if cmd:
                 InfoBar.success(
                     title="添加成功",

@@ -105,8 +105,6 @@ class SubActionRow(QWidget):
             header_layout.addWidget(self._icon)
         
         desc_text = self._action.description[:40]
-        if is_action_group and self._repeat_count > 1:
-            desc_text = f"{desc_text} (x{self._repeat_count})"
         self._desc_label = CaptionLabel(desc_text)
         header_layout.addWidget(self._desc_label, 1)
         
@@ -149,8 +147,12 @@ class SubActionRow(QWidget):
         
         from core.action_group import ensure_action_group_available
         group = ensure_action_group_available(group_name, self._local_group_manager)
+        
         if not group:
+            print(f"[DEBUG] 动作组展开失败: {group_name}, local_manager={self._local_group_manager}")
             return
+        
+        print(f"[DEBUG] 动作组展开成功: {group_name}, 动作数={len(group.actions)}")
         
         for i, sub_action in enumerate(group.actions[:30]):
             w = SubActionRow(sub_action, i, depth=self._depth + 1, local_group_manager=self._local_group_manager)
@@ -165,6 +167,14 @@ class SubActionRow(QWidget):
     def expand_if_needed(self):
         if not self._expanded and self._action.action_type == ActionType.ACTION_GROUP_REF:
             self._toggle_expand()
+    
+    def set_local_group_manager(self, manager):
+        self._local_group_manager = manager
+        if self._expanded:
+            self._build_sub_actions()
+        for w in self._sub_widgets:
+            if hasattr(w, 'set_local_group_manager'):
+                w.set_local_group_manager(manager)
     
     def set_running(self, running: bool, repeat: int = 0, sub_index: int = -1):
         self._is_running = running
@@ -181,8 +191,11 @@ class SubActionRow(QWidget):
                 self._status_label.setStyleSheet("color: #0078D4; font-weight: bold;")
                 self.setStyleSheet("background-color: rgba(0, 120, 212, 0.1);")
                 
-                if sub_index >= 0 and sub_index < len(self._sub_widgets):
+                if sub_index >= 0:
                     self.expand_if_needed()
+                    if len(self._sub_widgets) == 0:
+                        self._build_sub_actions()
+                    
                     for i, w in enumerate(self._sub_widgets):
                         if hasattr(w, 'set_running'):
                             if i == sub_index:
@@ -355,8 +368,11 @@ class ScriptCard(CardWidget):
         if not self._item.actions:
             return
         
+        local_mgr = self._local_group_manager or getattr(self._item, '_local_group_manager', None)
+        print(f"[DEBUG] ScriptCard._build_sub_widgets: local_mgr={local_mgr}, item._local_group_manager={getattr(self._item, '_local_group_manager', None)}")
+        
         for i, action in enumerate(self._item.actions[:50]):
-            w = SubActionRow(action, i, depth=1, local_group_manager=self._local_group_manager)
+            w = SubActionRow(action, i, depth=1, local_group_manager=local_mgr)
             self._sub_widgets.append(w)
             self._sub_layout.addWidget(w)
         
@@ -417,6 +433,9 @@ class ScriptCard(CardWidget):
                 w.reset()
     
     def set_sub_action_running(self, action_index: int, repeat: int = 0, sub_index: int = -1):
+        if len(self._sub_widgets) == 0 and self._item.actions:
+            self._build_sub_widgets()
+        
         for i, w in enumerate(self._sub_widgets):
             if hasattr(w, 'set_running') and hasattr(w, 'set_completed'):
                 if i == action_index:
@@ -438,10 +457,15 @@ class ScriptCard(CardWidget):
         self._local_group_manager = manager
         if self._expanded:
             self._build_sub_widgets()
+        for w in self._sub_widgets:
+            if hasattr(w, 'set_local_group_manager'):
+                w.set_local_group_manager(manager)
     
     def expand_if_needed(self):
         if not self._expanded:
             self._toggle_expand()
+        elif len(self._sub_widgets) == 0 and self._item.actions:
+            self._build_sub_widgets()
 
 
 class StatCard(CardWidget):
@@ -486,6 +510,14 @@ class DashboardPage(QWidget):
     _show_info_signal = pyqtSignal(str)
     _show_error_signal = pyqtSignal(str)
     _show_warning_signal = pyqtSignal(str)
+    _sub_action_start_signal = pyqtSignal(object, int, object, int, list)
+    _sub_action_end_signal = pyqtSignal(object, int, object, int, list, bool)
+    _action_start_signal = pyqtSignal(object, int)
+    _action_end_signal = pyqtSignal(object, int, bool)
+    _set_local_group_manager_signal = pyqtSignal(object)
+    _reset_all_cards_signal = pyqtSignal()
+    _set_card_running_signal = pyqtSignal(int)
+    _stop_signal = pyqtSignal()
     
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -735,6 +767,14 @@ class DashboardPage(QWidget):
         self._show_info_signal.connect(self._show_info)
         self._show_error_signal.connect(self._show_error)
         self._show_warning_signal.connect(self._show_warning)
+        self._sub_action_start_signal.connect(self._on_sub_action_start)
+        self._sub_action_end_signal.connect(self._on_sub_action_end)
+        self._action_start_signal.connect(self._on_action_start)
+        self._action_end_signal.connect(self._on_action_end)
+        self._set_local_group_manager_signal.connect(self._on_set_local_group_manager)
+        self._reset_all_cards_signal.connect(self._on_reset_all_cards)
+        self._set_card_running_signal.connect(self._on_set_card_running)
+        self._stop_signal.connect(self._on_stop_gui)
     
     def _refresh_windows(self):
         self._window_selector.refresh_windows()
@@ -780,7 +820,8 @@ class DashboardPage(QWidget):
             import uuid
             for filepath in filepaths:
                 try:
-                    result = Exporter.import_from_json(filepath)
+                    local_group_manager = LocalActionGroupManager()
+                    result = Exporter.import_from_json(filepath, local_group_manager)
                     if result is None:
                         continue
                     
@@ -796,6 +837,8 @@ class DashboardPage(QWidget):
                         path=filepath,
                         actions=actions
                     )
+                    item._local_group_manager = local_group_manager
+                    print(f"[DEBUG] 加载脚本: {name}, local_group_manager={local_group_manager}, groups={list(local_group_manager._groups.keys()) if hasattr(local_group_manager, '_groups') else 'N/A'}")
                     self._scripts.append(item)
                 except Exception as e:
                     print(f"加载脚本失败: {filepath}, {e}")
@@ -811,7 +854,8 @@ class DashboardPage(QWidget):
         self._total_card.set_value(str(len(self._scripts)))
         
         for i, item in enumerate(self._scripts):
-            card = ScriptCard(item, i)
+            local_mgr = getattr(item, '_local_group_manager', None)
+            card = ScriptCard(item, i, local_group_manager=local_mgr)
             card.run_requested.connect(self._run_single)
             card.delete_requested.connect(self._remove_script)
             card.move_up_requested.connect(self._move_up)
@@ -943,7 +987,8 @@ class DashboardPage(QWidget):
                         'name': cmd.name,
                         'command': cmd.command,
                         'window_title_pattern': cmd.window_title_pattern,
-                        'description': cmd.description
+                        'description': cmd.description,
+                        'delay_after_launch': cmd.delay_after_launch
                     }
             
             data = {
@@ -1269,10 +1314,8 @@ class DashboardPage(QWidget):
         self._run_btn.setEnabled(False)
         self._stop_btn.setEnabled(True)
         
-        for card in self._script_cards:
-            card.reset()
-        
-        self._script_cards[self._current_script_index].set_running(True)
+        self._reset_all_cards_signal.emit()
+        self._set_card_running_signal.emit(self._current_script_index)
         
         import threading
         thread = threading.Thread(target=self._execute_script_with_finish, args=(item,), daemon=True)
@@ -1292,8 +1335,7 @@ class DashboardPage(QWidget):
         self._run_btn.setEnabled(False)
         self._stop_btn.setEnabled(True)
         
-        for card in self._script_cards:
-            card.reset()
+        self._reset_all_cards_signal.emit()
         
         import threading
         thread = threading.Thread(target=self._execute_all, daemon=True)
@@ -1326,6 +1368,16 @@ class DashboardPage(QWidget):
                     success, message, already_running = cmd_manager.check_and_launch(launch_cmd_id)
                     
                     if success:
+                        launch_delay = cmd.delay_after_launch
+                        if launch_delay > 0:
+                            self._show_info_signal.emit(f"等待 {launch_delay} 秒后开始执行...")
+                            waited = 0
+                            while waited < launch_delay:
+                                if not self._is_running:
+                                    return
+                                time.sleep(0.1)
+                                waited += 0.1
+                        
                         target_pattern = cmd.window_title_pattern or cmd.name
                         
                         waited = 0
@@ -1373,13 +1425,13 @@ class DashboardPage(QWidget):
         self._player.set_speed(self._speed_spin.value())
         self._player.set_repeat_count(item.repeat_count)
         
-        self._player.add_callback('on_action_start', self._on_action_start)
-        self._player.add_callback('on_action_end', self._on_action_end)
-        self._player.add_callback('on_sub_action_start', self._on_sub_action_start)
-        self._player.add_callback('on_sub_action_end', self._on_sub_action_end)
+        self._player.add_callback('on_action_start', lambda a, i: self._action_start_signal.emit(a, i))
+        self._player.add_callback('on_action_end', lambda a, i, s: self._action_end_signal.emit(a, i, s))
+        self._player.add_callback('on_sub_action_start', lambda pa, pi, sa, si, idx: self._sub_action_start_signal.emit(pa, pi, sa, si, idx))
+        self._player.add_callback('on_sub_action_end', lambda pa, pi, sa, si, idx, s: self._sub_action_end_signal.emit(pa, pi, sa, si, idx, s))
         
         if self._current_script_index >= 0 and self._current_script_index < len(self._script_cards):
-            self._script_cards[self._current_script_index].set_local_group_manager(local_group_manager)
+            self._script_cards[self._current_script_index]._local_group_manager = local_group_manager
         
         if selected_hwnd:
             self._player.set_window_hwnd(selected_hwnd, self._window_utils)
@@ -1416,11 +1468,8 @@ class DashboardPage(QWidget):
             idx = self._scripts.index(item)
             self._current_script_index = idx
             
-            from PyQt5.QtCore import QMetaObject, Qt
-            
-            for card in self._script_cards:
-                card.reset()
-            self._script_cards[idx].set_running(True)
+            self._reset_all_cards_signal.emit()
+            self._set_card_running_signal.emit(idx)
             
             progress = (i + 1) / total
             self._update_progress_signal.emit(progress, i + 1, 1)
@@ -1433,9 +1482,7 @@ class DashboardPage(QWidget):
         self._is_running = False
         if self._player:
             self._player.stop()
-        self._run_btn.setEnabled(True)
-        self._stop_btn.setEnabled(False)
-        self._show_info("已停止")
+        self._stop_signal.emit()
     
     def _on_progress(self, progress, index, repeat):
         if progress >= 0:
@@ -1504,6 +1551,23 @@ class DashboardPage(QWidget):
     
     def _on_sub_action_end(self, parent_action, parent_index, sub_action, sub_index, indices, success):
         pass
+    
+    def _on_set_local_group_manager(self, manager):
+        if self._current_script_index >= 0 and self._current_script_index < len(self._script_cards):
+            self._script_cards[self._current_script_index].set_local_group_manager(manager)
+    
+    def _on_reset_all_cards(self):
+        for card in self._script_cards:
+            card.reset()
+    
+    def _on_set_card_running(self, index: int):
+        if 0 <= index < len(self._script_cards):
+            self._script_cards[index].set_running(True)
+    
+    def _on_stop_gui(self):
+        self._run_btn.setEnabled(True)
+        self._stop_btn.setEnabled(False)
+        self._show_info("已停止")
     
     def _on_state_changed(self, state, message):
         if state == PlayerState.IDLE:

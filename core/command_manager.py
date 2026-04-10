@@ -21,6 +21,7 @@ class LaunchCommand:
     created_at: str = ""
     last_used: str = ""
     use_count: int = 0
+    delay_after_launch: float = 0.0
     
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -87,7 +88,7 @@ class CommandManager:
             return False
     
     def add_command(self, name: str, command: str, window_title_pattern: str = "", 
-                    description: str = "") -> Optional[LaunchCommand]:
+                    description: str = "", delay_after_launch: float = 0.0) -> Optional[LaunchCommand]:
         import uuid
         from datetime import datetime
         
@@ -102,7 +103,8 @@ class CommandManager:
             description=description,
             created_at=now,
             last_used=now,
-            use_count=0
+            use_count=0,
+            delay_after_launch=delay_after_launch
         )
         
         self._commands[cmd_id] = launch_cmd

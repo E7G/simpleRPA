@@ -287,3 +287,67 @@ class WindowUtils:
             return None
         except Exception:
             return None
+    
+    def set_window_topmost(self, hwnd: int) -> bool:
+        """
+        设置窗口始终置顶
+        
+        Args:
+            hwnd: 窗口句柄
+        
+        Returns:
+            bool: 是否成功
+        """
+        if not self._win32_available:
+            return False
+        
+        import win32gui
+        import win32con
+        
+        try:
+            if not win32gui.IsWindow(hwnd):
+                return False
+            
+            win32gui.SetWindowPos(
+                hwnd,
+                win32con.HWND_TOPMOST,
+                0, 0, 0, 0,
+                win32con.SWP_NOMOVE | win32con.SWP_NOSIZE | win32con.SWP_SHOWWINDOW
+            )
+            
+            win32gui.ShowWindow(hwnd, win32con.SW_SHOW)
+            win32gui.SetForegroundWindow(hwnd)
+            
+            return True
+        except Exception:
+            return False
+    
+    def remove_window_topmost(self, hwnd: int) -> bool:
+        """
+        取消窗口始终置顶
+        
+        Args:
+            hwnd: 窗口句柄
+        
+        Returns:
+            bool: 是否成功
+        """
+        if not self._win32_available:
+            return False
+        
+        import win32gui
+        import win32con
+        
+        try:
+            if not win32gui.IsWindow(hwnd):
+                return False
+            
+            win32gui.SetWindowPos(
+                hwnd,
+                win32con.HWND_NOTOPMOST,
+                0, 0, 0, 0,
+                win32con.SWP_NOMOVE | win32con.SWP_NOSIZE | win32con.SWP_SHOWWINDOW
+            )
+            return True
+        except Exception:
+            return False

@@ -1447,13 +1447,26 @@ class DashboardPage(QWidget):
         else:
             self._status_label.setText(f"开始执行 {total_actions} 个动作，共 {item.repeat_count} 轮...")
         
+        if selected_hwnd:
+            self._window_utils.set_window_topmost(selected_hwnd)
+        
         self._player.play()
         
+        topmost_check_counter = 0
         while self._player.state not in [PlayerState.IDLE]:
             if not self._is_running:
                 self._player.stop()
                 break
             time.sleep(0.1)
+            
+            if selected_hwnd:
+                topmost_check_counter += 1
+                if topmost_check_counter >= 10:
+                    self._window_utils.set_window_topmost(selected_hwnd)
+                    topmost_check_counter = 0
+        
+        if selected_hwnd:
+            self._window_utils.remove_window_topmost(selected_hwnd)
     
     def _execute_all(self):
         import time

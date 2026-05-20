@@ -1,4 +1,3 @@
-import pyautogui
 import time
 import os
 from enum import Enum
@@ -147,6 +146,8 @@ class Action:
             print(f"[激活窗口失败] {e}")
     
     def _execute_once(self, window_offset: Optional[Tuple[int, int]] = None, should_stop: Optional[Callable[[], bool]] = None, local_group_manager=None) -> bool:
+        import pyautogui
+
         if self.delay_before > 0:
             end_time = time.time() + self.delay_before
             while time.time() < end_time:

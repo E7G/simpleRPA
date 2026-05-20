@@ -4,7 +4,6 @@ import os
 from typing import List, Callable, Optional, Dict, Any
 from dataclasses import dataclass
 from enum import Enum
-from pynput import mouse, keyboard
 from .actions import Action, ActionType
 
 
@@ -39,8 +38,8 @@ class Recorder:
         self._stopping: bool = False
         self._lock = threading.Lock()
         
-        self._mouse_listener: Optional[mouse.Listener] = None
-        self._keyboard_listener: Optional[keyboard.Listener] = None
+        self._mouse_listener = None
+        self._keyboard_listener = None
         
         self._callbacks: Dict[str, List[Callable]] = {
             'on_action_recorded': [],
@@ -72,6 +71,8 @@ class Recorder:
         if self.state == RecordState.RECORDING:
             return
         
+        from pynput import mouse, keyboard
+
         self.actions = []
         self.state = RecordState.RECORDING
         self.start_time = time.time()
@@ -181,7 +182,7 @@ class Recorder:
         )
         self._add_action(action)
     
-    def _on_mouse_click(self, x: int, y: int, button: mouse.Button, pressed: bool):
+    def _on_mouse_click(self, x: int, y: int, button, pressed: bool):
         if not pressed:
             return
         
@@ -198,7 +199,8 @@ class Recorder:
             if self._is_recording_text:
                 self._flush_text_input()
             
-            button_name = 'left' if button == mouse.Button.left else 'right' if button == mouse.Button.right else 'middle'
+            from pynput.mouse import Button
+            button_name = 'left' if button == Button.left else 'right' if button == Button.right else 'middle'
             
             if self.config.record_as_image_click:
                 image_path = self._capture_click_region(x, y)
@@ -304,6 +306,7 @@ class Recorder:
         pass
     
     def _get_key_name(self, key) -> Optional[str]:
+        from pynput import keyboard
         key_map = {
             keyboard.Key.space: 'space',
             keyboard.Key.enter: 'enter',

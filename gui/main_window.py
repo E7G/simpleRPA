@@ -6,7 +6,7 @@ from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout,
     QFileDialog, QApplication, QFrame
 )
-from PyQt5.QtCore import Qt, QTimer, pyqtSignal
+from PyQt5.QtCore import Qt, QTimer, pyqtSignal, QEvent
 from typing import List, Optional, Dict
 
 from qfluentwidgets import (
@@ -33,6 +33,18 @@ from .recorder_panel import RecorderPanel
 from .widgets import WindowSelector
 from .command_panel import CommandManagerWidget
 from .dashboard_page import DashboardPage
+from .scheduler_page import SchedulerPage
+from .settings_page import SettingsPage
+from .tray_service import TrayService
+
+
+def _get_icon_path():
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    for name in ('icon.ico', 'icon.png'):
+        path = os.path.join(root, name)
+        if os.path.exists(path):
+            return path
+    return None
 
 
 APP_VERSION = "0.1.0"
@@ -57,6 +69,8 @@ class MainWindow(FluentWindow):
         self._tab_players: Dict[str, Player] = {}
         self._tab_files: Dict[str, Optional[str]] = {}
         self._tab_modified: Dict[str, bool] = {}
+        self._really_quit = False
+        self._tray: Optional[TrayService] = None
         
         self._setup_ui()
         self._setup_navigation()
@@ -78,9 +92,12 @@ class MainWindow(FluentWindow):
         
         self._update_checker = UpdateChecker(APP_VERSION)
         self._check_for_update()
+        self._setup_tray()
+        self._apply_startup_visibility()
     
     def _setup_ui(self):
-        setTheme(Theme.AUTO)
+        theme_map = {'auto': Theme.AUTO, 'light': Theme.LIGHT, 'dark': Theme.DARK}
+        setTheme(theme_map.get(self._config.theme, Theme.AUTO))
         setThemeColor('#0078d4')
         
         font = QApplication.font()
@@ -96,6 +113,12 @@ class MainWindow(FluentWindow):
             self.dashboardInterface, FluentIcon.PLAY, '执行面板'
         )
         
+        self.schedulerInterface = SchedulerPage()
+        self.schedulerInterface.setObjectName('schedulerInterface')
+        self.addSubInterface(
+            self.schedulerInterface, FluentIcon.CALENDAR, '定时任务'
+        )
+        
         self.homeInterface = QWidget()
         self.homeInterface.setObjectName('homeInterface')
         self.addSubInterface(
@@ -109,6 +132,14 @@ class MainWindow(FluentWindow):
         )
         
         self._setup_command_interface()
+        
+        self.settingsInterface = SettingsPage()
+        self.settingsInterface.setObjectName('settingsInterface')
+        self.addSubInterface(
+            self.settingsInterface, FluentIcon.SETTING, '设置',
+            position=NavigationItemPosition.BOTTOM
+        )
+        self.settingsInterface.settings_changed.connect(self._on_settings_changed)
         
         main_layout = QVBoxLayout(self.homeInterface)
         main_layout.setContentsMargins(24, 20, 24, 24)
@@ -259,6 +290,59 @@ class MainWindow(FluentWindow):
         status_layout.addWidget(self._coord_label)
         
         main_layout.addWidget(self._status_bar)
+    
+    def _setup_tray(self):
+        if not self._config.tray_enabled:
+            return
+        self._tray = TrayService(self)
+        if self._tray.setup(self, _get_icon_path()):
+            from utils.notification import set_tray_notifier
+            set_tray_notifier(self._tray)
+            self._tray.show_window_requested.connect(self._show_from_tray)
+            self._tray.hide_window_requested.connect(self.hide)
+            self._tray.run_dashboard_requested.connect(self._tray_run_dashboard)
+            self._tray.open_scheduler_requested.connect(self._tray_open_scheduler)
+            self._tray.quit_requested.connect(self._quit_from_tray)
+    
+    def _apply_startup_visibility(self):
+        if self._config.start_minimized and self._tray and self._tray.is_visible:
+            self.hide()
+    
+    def _on_settings_changed(self):
+        self.settingsInterface.apply_theme()
+        if self._config.tray_enabled and (not self._tray or not self._tray.is_visible):
+            self._setup_tray()
+    
+    def _show_from_tray(self):
+        self.show()
+        self.raise_()
+        self.activateWindow()
+    
+    def _tray_run_dashboard(self):
+        self._show_from_tray()
+        self.switchTo(self.dashboardInterface)
+        if hasattr(self.dashboardInterface, '_run_all'):
+            self.dashboardInterface._run_all()
+    
+    def _tray_open_scheduler(self):
+        self._show_from_tray()
+        self.switchTo(self.schedulerInterface)
+    
+    def _quit_from_tray(self):
+        self._really_quit = True
+        self.close()
+    
+    def changeEvent(self, event):
+        if (
+            event.type() == QEvent.WindowStateChange
+            and self.isMinimized()
+            and self._config.minimize_to_tray
+            and self._config.tray_enabled
+            and self._tray
+            and self._tray.is_visible
+        ):
+            QTimer.singleShot(0, self.hide)
+        super().changeEvent(event)
     
     def _setup_navigation(self):
         self.navigationInterface.addItem(
@@ -513,6 +597,22 @@ class MainWindow(FluentWindow):
         self._config.save()
     
     def closeEvent(self, event):
+        if (
+            not self._really_quit
+            and self._config.close_to_tray
+            and self._config.tray_enabled
+            and self._tray
+            and self._tray.is_visible
+        ):
+            event.ignore()
+            self.hide()
+            if self._tray:
+                self._tray.show_message(
+                    "SimpleRPA",
+                    "程序已最小化到托盘，双击图标可恢复窗口",
+                )
+            return
+        
         has_unsaved = any(self._tab_modified.values())
         if has_unsaved:
             box = MessageBox('保存更改', '有未保存的脚本，是否保存?', self)
@@ -527,7 +627,13 @@ class MainWindow(FluentWindow):
         self._recorder_panel.stop_recording()
         for player in self._tab_players.values():
             player.stop_and_wait(timeout=1.0)
+        if hasattr(self, 'schedulerInterface'):
+            self.schedulerInterface.save_tasks()
+        from core.scheduler import SchedulerService
+        SchedulerService.get_instance().stop()
         self._save_settings()
+        if self._tray:
+            self._tray.hide()
         event.accept()
     
     def _update_mouse_position(self):
@@ -1118,12 +1224,14 @@ class MainWindow(FluentWindow):
                     total_actions = len(player.actions)
                     total_repeats = player.current_repeat
                     self._status_label.setText(f"执行完成 | 共 {total_actions} 个动作，{total_repeats} 轮")
-                    from utils.notification import send_notification
-                    send_notification("SimpleRPA 执行完成", f"已完成 {total_actions} 个动作，共 {total_repeats} 轮")
+                    if self._config.notify_on_complete:
+                        from utils.notification import send_notification
+                        send_notification("SimpleRPA 执行完成", f"已完成 {total_actions} 个动作，共 {total_repeats} 轮")
                 else:
                     self._status_label.setText("执行完成")
-                    from utils.notification import send_notification
-                    send_notification("SimpleRPA 执行完成", "脚本执行完成")
+                    if self._config.notify_on_complete:
+                        from utils.notification import send_notification
+                        send_notification("SimpleRPA 执行完成", "脚本执行完成")
             else:
                 if player:
                     self._status_label.setText(f"执行中断 | 已完成 {player.current_index} 个动作")

@@ -1605,8 +1605,9 @@ class DashboardPage(QWidget):
                 total_actions = len(self._player.actions)
                 total_repeats = self._player.current_repeat
                 self._status_label.setText(f"执行完成 | 共 {total_actions} 个动作，{total_repeats} 轮")
-                from utils.notification import send_notification
-                send_notification("SimpleRPA 执行完成", f"已完成 {total_actions} 个动作，共 {total_repeats} 轮")
+                if self._config.notify_on_complete:
+                    from utils.notification import send_notification
+                    send_notification("SimpleRPA 执行完成", f"已完成 {total_actions} 个动作，共 {total_repeats} 轮")
             else:
                 self._status_label.setText("执行完成")
             self._status_icon.setIcon(FluentIcon.COMPLETED)

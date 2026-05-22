@@ -1,13 +1,15 @@
 import os
 import json
-from PyQt5.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QFileDialog, QLabel, QFrame
+from PyQt5.QtWidgets import (
+    QWidget, QVBoxLayout, QHBoxLayout, QFileDialog, QLabel, QFrame,
+)
 from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtGui import QColor
 from typing import Dict, Optional, List
 from dataclasses import dataclass
 
 from qfluentwidgets import (
-    FluentIcon, PushButton, PrimaryPushButton, SpinBox, DoubleSpinBox,
+    FluentIcon, PushButton, PrimaryPushButton,
     BodyLabel, StrongBodyLabel, ProgressBar, CardWidget, ElevatedCardWidget,
     CheckBox, SubtitleLabel, CaptionLabel, IconWidget, ScrollArea,
     TransparentToolButton, InfoBadge, TitleLabel, HeaderCardWidget,
@@ -23,6 +25,11 @@ from core.command_manager import CommandManager
 from utils.config import Config
 from utils.window_utils import WindowUtils
 from .widgets import WindowSelector
+from .fluent_theme import (
+    muted_label_style, muted_caption_style, accent_color, success_color,
+    scroll_border_style,
+    create_compact_int_spin, create_compact_float_spin, InlineNumericField,
+)
 
 
 ACTION_ICONS = {
@@ -76,24 +83,24 @@ class SubActionRow(QWidget):
         self._current_repeat = 0
         self._sub_action_index = -1
         self._setup_ui()
-    
+
     def _setup_ui(self):
         self._main_layout = QVBoxLayout(self)
         self._main_layout.setContentsMargins(0, 0, 0, 0)
         self._main_layout.setSpacing(0)
-        
+
         header = QWidget()
         header_layout = QHBoxLayout(header)
         header_layout.setContentsMargins(self._depth * 16 + 12, 4, 8, 4)
         header_layout.setSpacing(6)
-        
+
         self._index_label = CaptionLabel(f"{self._index + 1}")
         self._index_label.setFixedWidth(16)
         self._index_label.setStyleSheet("color: #888;")
         header_layout.addWidget(self._index_label)
-        
+
         is_action_group = self._action.action_type == ActionType.ACTION_GROUP_REF
-        
+
         if is_action_group:
             self._expand_btn = TransparentToolButton(FluentIcon.CARE_RIGHT_SOLID)
             self._expand_btn.setFixedSize(16, 16)
@@ -104,26 +111,26 @@ class SubActionRow(QWidget):
             self._icon = IconWidget(icon, self)
             self._icon.setFixedSize(12, 12)
             header_layout.addWidget(self._icon)
-        
+
         desc_text = self._action.description[:40]
         self._desc_label = CaptionLabel(desc_text)
         header_layout.addWidget(self._desc_label, 1)
-        
+
         self._status_label = CaptionLabel("")
         self._status_label.setFixedWidth(40)
         header_layout.addWidget(self._status_label)
-        
+
         self._main_layout.addWidget(header)
-        
+
         self._sub_container = QWidget()
         self._sub_container.setVisible(False)
         self._sub_layout = QVBoxLayout(self._sub_container)
         self._sub_layout.setContentsMargins(0, 0, 0, 0)
         self._sub_layout.setSpacing(0)
         self._main_layout.addWidget(self._sub_container)
-        
+
         header.setFixedHeight(24)
-    
+
     def _toggle_expand(self):
         self._expanded = not self._expanded
         if self._expanded:
@@ -133,42 +140,39 @@ class SubActionRow(QWidget):
         else:
             self._expand_btn.setIcon(FluentIcon.CARE_RIGHT_SOLID)
             self._sub_container.setVisible(False)
-    
+
     def _build_sub_actions(self):
         for w in self._sub_widgets:
             w.deleteLater()
         self._sub_widgets.clear()
-        
+
         if self._action.action_type != ActionType.ACTION_GROUP_REF:
             return
-        
+
         group_name = self._action.params.get('group_name', '')
         if not group_name:
             return
-        
+
         from core.action_group import ensure_action_group_available
         group = ensure_action_group_available(group_name, self._local_group_manager)
-        
+
         if not group:
-            print(f"[DEBUG] 动作组展开失败: {group_name}, local_manager={self._local_group_manager}")
             return
-        
-        print(f"[DEBUG] 动作组展开成功: {group_name}, 动作数={len(group.actions)}")
-        
+
         for i, sub_action in enumerate(group.actions[:30]):
             w = SubActionRow(sub_action, i, depth=self._depth + 1, local_group_manager=self._local_group_manager)
             self._sub_widgets.append(w)
             self._sub_layout.addWidget(w)
-        
+
         if len(group.actions) > 30:
             more_label = CaptionLabel(f"... 还有 {len(group.actions) - 30} 个动作")
             more_label.setStyleSheet("color: #888; padding-left: 28px;")
             self._sub_layout.addWidget(more_label)
-    
+
     def expand_if_needed(self):
         if not self._expanded and self._action.action_type == ActionType.ACTION_GROUP_REF:
             self._toggle_expand()
-    
+
     def set_local_group_manager(self, manager):
         self._local_group_manager = manager
         if self._expanded:
@@ -176,13 +180,13 @@ class SubActionRow(QWidget):
         for w in self._sub_widgets:
             if hasattr(w, 'set_local_group_manager'):
                 w.set_local_group_manager(manager)
-    
+
     def set_running(self, running: bool, repeat: int = 0, sub_index: int = -1):
         self._is_running = running
         self._is_completed = False
         self._current_repeat = repeat
         self._sub_action_index = sub_index
-        
+
         if running:
             if self._action.action_type == ActionType.ACTION_GROUP_REF:
                 if self._repeat_count > 1:
@@ -191,12 +195,12 @@ class SubActionRow(QWidget):
                     self._status_label.setText("▶")
                 self._status_label.setStyleSheet("color: #0078D4; font-weight: bold;")
                 self.setStyleSheet("background-color: rgba(0, 120, 212, 0.1);")
-                
+
                 if sub_index >= 0:
                     self.expand_if_needed()
                     if len(self._sub_widgets) == 0:
                         self._build_sub_actions()
-                    
+
                     for i, w in enumerate(self._sub_widgets):
                         if hasattr(w, 'set_running'):
                             if i == sub_index:
@@ -212,7 +216,7 @@ class SubActionRow(QWidget):
         else:
             self._status_label.setText("")
             self.setStyleSheet("")
-    
+
     def set_completed(self, completed: bool):
         self._is_completed = completed
         self._is_running = False
@@ -226,7 +230,7 @@ class SubActionRow(QWidget):
         else:
             self._status_label.setText("")
             self.setStyleSheet("")
-    
+
     def reset(self):
         self._is_running = False
         self._is_completed = False
@@ -261,25 +265,25 @@ class ScriptCard(CardWidget):
         self._main_layout = QVBoxLayout(self)
         self._main_layout.setContentsMargins(16, 12, 12, 12)
         self._main_layout.setSpacing(0)
-        
+
         header_layout = QHBoxLayout()
         header_layout.setSpacing(12)
-        
+
         self._index_label = TitleLabel(str(self._index + 1))
         self._index_label.setFixedWidth(28)
         header_layout.addWidget(self._index_label)
-        
+
         icon_widget = IconWidget(FluentIcon.DOCUMENT, self)
         icon_widget.setFixedSize(20, 20)
         icon_widget.setStyleSheet("color: #0078D4;")
         header_layout.addWidget(icon_widget)
-        
+
         content_layout = QVBoxLayout()
         content_layout.setSpacing(4)
-        
+
         self._name_label = StrongBodyLabel(self._item.name)
         content_layout.addWidget(self._name_label)
-        
+
         info_parts = []
         if self._item.delay_before > 0:
             info_parts.append(f"等待 {self._item.delay_before}s")
@@ -287,70 +291,70 @@ class ScriptCard(CardWidget):
             info_parts.append(f"重复 {self._item.repeat_count} 次")
         action_count = len(self._item.actions) if self._item.actions else 0
         info_parts.append(f"{action_count} 个动作")
-        
+
         self._info_label = CaptionLabel("  •  ".join(info_parts))
         content_layout.addWidget(self._info_label)
-        
+
         header_layout.addLayout(content_layout, 1)
-        
+
         self._status_label = QLabel()
         self._status_label.setFixedSize(20, 20)
         self._status_label.setVisible(False)
         header_layout.addWidget(self._status_label)
-        
+
         btn_layout = QHBoxLayout()
         btn_layout.setSpacing(4)
-        
+
         self._expand_btn = TransparentToolButton(FluentIcon.CARE_RIGHT_SOLID)
         self._expand_btn.setFixedSize(28, 28)
         self._expand_btn.setToolTip("展开/折叠")
         self._expand_btn.clicked.connect(self._toggle_expand)
         btn_layout.addWidget(self._expand_btn)
-        
+
         self._run_btn = TransparentToolButton(FluentIcon.PLAY)
         self._run_btn.setFixedSize(28, 28)
         self._run_btn.setToolTip("执行此脚本")
         self._run_btn.clicked.connect(lambda: self.run_requested.emit(self._item.id))
         btn_layout.addWidget(self._run_btn)
-        
+
         self._toggle_btn = TransparentToolButton(FluentIcon.CHECKBOX)
         self._toggle_btn.setFixedSize(28, 28)
         self._toggle_btn.setToolTip("启用/禁用")
         self._toggle_btn.clicked.connect(self._on_toggle)
         btn_layout.addWidget(self._toggle_btn)
-        
+
         self._up_btn = TransparentToolButton(FluentIcon.UP)
         self._up_btn.setFixedSize(28, 28)
         self._up_btn.setToolTip("上移")
         self._up_btn.clicked.connect(lambda: self.move_up_requested.emit(self._item.id))
         btn_layout.addWidget(self._up_btn)
-        
+
         self._down_btn = TransparentToolButton(FluentIcon.DOWN)
         self._down_btn.setFixedSize(28, 28)
         self._down_btn.setToolTip("下移")
         self._down_btn.clicked.connect(lambda: self.move_down_requested.emit(self._item.id))
         btn_layout.addWidget(self._down_btn)
-        
+
         self._delete_btn = TransparentToolButton(FluentIcon.DELETE)
         self._delete_btn.setFixedSize(28, 28)
         self._delete_btn.setToolTip("移除")
         self._delete_btn.clicked.connect(lambda: self.delete_requested.emit(self._item.id))
         btn_layout.addWidget(self._delete_btn)
-        
+
         header_layout.addLayout(btn_layout)
-        
+
         self._main_layout.addLayout(header_layout)
-        
+
         self._sub_container = QWidget()
         self._sub_container.setVisible(False)
         self._sub_layout = QVBoxLayout(self._sub_container)
         self._sub_layout.setContentsMargins(0, 8, 0, 0)
         self._sub_layout.setSpacing(1)
         self._main_layout.addWidget(self._sub_container)
-        
+
         self._update_style()
         self._update_toggle_icon()
-    
+
     def _toggle_expand(self):
         self._expanded = not self._expanded
         if self._expanded:
@@ -360,23 +364,22 @@ class ScriptCard(CardWidget):
         else:
             self._expand_btn.setIcon(FluentIcon.CARE_RIGHT_SOLID)
             self._sub_container.setVisible(False)
-    
+
     def _build_sub_widgets(self):
         for w in self._sub_widgets:
             w.deleteLater()
         self._sub_widgets.clear()
-        
+
         if not self._item.actions:
             return
-        
+
         local_mgr = self._local_group_manager or getattr(self._item, '_local_group_manager', None)
-        print(f"[DEBUG] ScriptCard._build_sub_widgets: local_mgr={local_mgr}, item._local_group_manager={getattr(self._item, '_local_group_manager', None)}")
-        
+
         for i, action in enumerate(self._item.actions[:50]):
             w = SubActionRow(action, i, depth=1, local_group_manager=local_mgr)
             self._sub_widgets.append(w)
             self._sub_layout.addWidget(w)
-        
+
         if len(self._item.actions) > 50:
             more_label = CaptionLabel(f"... 还有 {len(self._item.actions) - 50} 个动作")
             more_label.setStyleSheet("color: #888; padding-left: 28px;")
@@ -432,11 +435,11 @@ class ScriptCard(CardWidget):
         for w in self._sub_widgets:
             if hasattr(w, 'reset'):
                 w.reset()
-    
+
     def set_sub_action_running(self, action_index: int, repeat: int = 0, sub_index: int = -1):
         if len(self._sub_widgets) == 0 and self._item.actions:
             self._build_sub_widgets()
-        
+
         for i, w in enumerate(self._sub_widgets):
             if hasattr(w, 'set_running') and hasattr(w, 'set_completed'):
                 if i == action_index:
@@ -445,7 +448,7 @@ class ScriptCard(CardWidget):
                     w.set_completed(True)
                 else:
                     w.reset()
-    
+
     def set_sub_action_completed(self, action_index: int):
         for i, w in enumerate(self._sub_widgets):
             if hasattr(w, 'set_completed'):
@@ -453,7 +456,7 @@ class ScriptCard(CardWidget):
                     w.set_completed(True)
                 else:
                     w.reset()
-    
+
     def set_local_group_manager(self, manager):
         self._local_group_manager = manager
         if self._expanded:
@@ -461,7 +464,7 @@ class ScriptCard(CardWidget):
         for w in self._sub_widgets:
             if hasattr(w, 'set_local_group_manager'):
                 w.set_local_group_manager(manager)
-    
+
     def expand_if_needed(self):
         if not self._expanded:
             self._toggle_expand()
@@ -484,7 +487,7 @@ class StatCard(CardWidget):
         
         icon_widget = IconWidget(self._icon, self)
         icon_widget.setFixedSize(32, 32)
-        icon_widget.setStyleSheet("color: #0078d4;")
+        icon_widget.setStyleSheet(f"color: {accent_color()};")
         layout.addWidget(icon_widget)
         
         content = QVBoxLayout()
@@ -494,7 +497,7 @@ class StatCard(CardWidget):
         content.addWidget(self._value_label)
         
         title_label = BodyLabel(self._title)
-        title_label.setStyleSheet("color: #666;")
+        title_label.setStyleSheet(muted_label_style())
         content.addWidget(title_label)
         
         layout.addLayout(content)
@@ -541,13 +544,17 @@ class DashboardPage(QWidget):
     
     def _setup_ui(self):
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(28, 24, 28, 24)
-        layout.setSpacing(20)
+        layout.setContentsMargins(12, 12, 12, 12)
+        layout.setSpacing(16)
         
         header_layout = QHBoxLayout()
         
-        title = TitleLabel("执行面板")
+        title = TitleLabel("控制台")
         header_layout.addWidget(title)
+        
+        subtitle = CaptionLabel("管理并运行桌面自动化流程")
+        subtitle.setStyleSheet(muted_label_style("margin-left: 8px;"))
+        header_layout.addWidget(subtitle, 0, Qt.AlignBottom)
         
         header_layout.addStretch()
         
@@ -628,31 +635,17 @@ class DashboardPage(QWidget):
         control_layout.addLayout(launch_row)
         
         settings_row = QHBoxLayout()
-        settings_row.setSpacing(24)
+        settings_row.setSpacing(16)
         
-        speed_group = QVBoxLayout()
-        speed_group.setSpacing(6)
-        speed_label = BodyLabel("执行速度")
-        speed_group.addWidget(speed_label)
-        self._speed_spin = DoubleSpinBox()
-        self._speed_spin.setRange(0.1, 10.0)
-        self._speed_spin.setSingleStep(0.1)
-        self._speed_spin.setValue(self._config.default_speed)
-        self._speed_spin.setSuffix(" 倍")
-        self._speed_spin.setFixedWidth(100)
-        speed_group.addWidget(self._speed_spin)
-        settings_row.addLayout(speed_group)
+        self._speed_spin = create_compact_float_spin(
+            0.1, 10.0, self._config.default_speed, suffix="x", width=76,
+        )
+        settings_row.addWidget(InlineNumericField("速度", self._speed_spin))
         
-        repeat_group = QVBoxLayout()
-        repeat_group.setSpacing(6)
-        repeat_label = BodyLabel("重复次数")
-        repeat_group.addWidget(repeat_label)
-        self._repeat_spin = SpinBox()
-        self._repeat_spin.setRange(1, 999)
-        self._repeat_spin.setValue(self._config.default_repeat_count)
-        self._repeat_spin.setFixedWidth(100)
-        repeat_group.addWidget(self._repeat_spin)
-        settings_row.addLayout(repeat_group)
+        self._repeat_spin = create_compact_int_spin(
+            1, 999, self._config.default_repeat_count, width=68,
+        )
+        settings_row.addWidget(InlineNumericField("重复", self._repeat_spin))
         
         settings_row.addStretch()
         
@@ -713,10 +706,13 @@ class DashboardPage(QWidget):
         task_header = QHBoxLayout()
         task_title = StrongBodyLabel("脚本列表")
         task_header.addWidget(task_title)
+        self._script_count_label = CaptionLabel("0 项")
+        self._script_count_label.setStyleSheet(muted_caption_style("margin-left: 6px;"))
+        task_header.addWidget(self._script_count_label, 0, Qt.AlignVCenter)
         task_header.addStretch()
         
         clear_btn = TransparentToolButton(FluentIcon.DELETE)
-        clear_btn.setFixedSize(28, 28)
+        clear_btn.setFixedSize(24, 24)
         clear_btn.setToolTip("清空列表")
         clear_btn.clicked.connect(self._clear_list)
         task_header.addWidget(clear_btn)
@@ -725,14 +721,14 @@ class DashboardPage(QWidget):
         
         self._scroll_area = ScrollArea()
         self._scroll_area.setWidgetResizable(True)
-        self._scroll_area.setStyleSheet("QScrollArea { border: 1px solid rgba(0, 0, 0, 0.06); border-radius: 8px; background: transparent; }")
+        self._scroll_area.setStyleSheet(scroll_border_style())
         
         self._task_container = QWidget()
         self._task_container.setStyleSheet("background: transparent;")
         self._task_layout = QVBoxLayout(self._task_container)
         self._task_layout.setAlignment(Qt.AlignTop)
         self._task_layout.setContentsMargins(8, 8, 8, 8)
-        self._task_layout.setSpacing(8)
+        self._task_layout.setSpacing(6)
         self._task_layout.addStretch()
         
         self._scroll_area.setWidget(self._task_container)
@@ -740,19 +736,20 @@ class DashboardPage(QWidget):
         
         self._empty_label = QWidget()
         empty_layout = QVBoxLayout(self._empty_label)
-        empty_layout.setContentsMargins(40, 60, 40, 60)
-        empty_layout.setSpacing(16)
+        empty_layout.setContentsMargins(32, 48, 32, 48)
+        empty_layout.setSpacing(10)
         
         empty_icon = IconWidget(FluentIcon.DOCUMENT)
-        empty_icon.setFixedSize(48, 48)
+        empty_icon.setFixedSize(40, 40)
         empty_layout.addWidget(empty_icon, 0, Qt.AlignCenter)
         
-        empty_text = StrongBodyLabel("暂无脚本")
+        empty_text = SubtitleLabel("暂无脚本")
         empty_text.setAlignment(Qt.AlignCenter)
         empty_layout.addWidget(empty_text)
         
-        empty_hint = BodyLabel("点击\"添加脚本\"将脚本加入列表")
+        empty_hint = CaptionLabel("点击「添加脚本」将 .rpa.json 加入列表")
         empty_hint.setAlignment(Qt.AlignCenter)
+        empty_hint.setStyleSheet(muted_caption_style())
         empty_layout.addWidget(empty_hint)
         
         right_layout.addWidget(self._empty_label)
@@ -851,8 +848,12 @@ class DashboardPage(QWidget):
             card.deleteLater()
         self._script_cards.clear()
         
-        self._empty_label.setVisible(len(self._scripts) == 0)
-        self._total_card.set_value(str(len(self._scripts)))
+        count = len(self._scripts)
+        self._empty_label.setVisible(count == 0)
+        self._scroll_area.setVisible(count > 0)
+        self._total_card.set_value(str(count))
+        if hasattr(self, '_script_count_label'):
+            self._script_count_label.setText(f"{count} 项")
         
         for i, item in enumerate(self._scripts):
             local_mgr = getattr(item, '_local_group_manager', None)
@@ -1605,9 +1606,8 @@ class DashboardPage(QWidget):
                 total_actions = len(self._player.actions)
                 total_repeats = self._player.current_repeat
                 self._status_label.setText(f"执行完成 | 共 {total_actions} 个动作，{total_repeats} 轮")
-                if self._config.notify_on_complete:
-                    from utils.notification import send_notification
-                    send_notification("SimpleRPA 执行完成", f"已完成 {total_actions} 个动作，共 {total_repeats} 轮")
+                from utils.notification import send_notification
+                send_notification("SimpleRPA 执行完成", f"已完成 {total_actions} 个动作，共 {total_repeats} 轮")
             else:
                 self._status_label.setText("执行完成")
             self._status_icon.setIcon(FluentIcon.COMPLETED)

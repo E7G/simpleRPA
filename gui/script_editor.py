@@ -16,75 +16,58 @@ from qfluentwidgets import (
     ListWidget, CardWidget, MessageBox, LineEdit, SubtitleLabel,
     ScrollArea, TransparentToolButton, FluentIcon, Pivot,
     TabBar, TabCloseButtonDisplayMode, RoundMenu, Action,
-    MessageBoxBase, InfoBar, InfoBarPosition
+    MessageBoxBase, InfoBar, InfoBarPosition, IconWidget, CaptionLabel,
 )
+
+from .fluent_theme import flow_list_style, flow_action_item_style
+from .action_list_row import ActionListRow
 
 
 class ActionItemWidget(QWidget):
     action_changed = pyqtSignal()
     delete_requested = pyqtSignal()
-    
+
     def __init__(self, action: ScriptAction, index: int, parent=None):
         super().__init__(parent)
+        self.setObjectName("ActionItemWidget")
         self._action = action
         self._index = index
         self._is_running = False
         self._setup_ui()
-    
+
     def _setup_ui(self):
-        layout = QHBoxLayout(self)
-        layout.setContentsMargins(12, 8, 12, 8)
-        layout.setSpacing(12)
-        
-        is_from_group = getattr(self._action, '_is_from_group', False)
-        group_name = getattr(self._action, '_group_name', '')
-        
-        self._index_label = StrongBodyLabel(f"{self._index + 1}")
-        self._index_label.setObjectName("indexLabel")
-        self._index_label.setFixedWidth(30)
-        self._index_label.setAlignment(Qt.AlignCenter)
-        layout.addWidget(self._index_label)
-        
-        if is_from_group:
-            group_indicator = BodyLabel(f"📁 {group_name}")
-            layout.addWidget(group_indicator)
-        
-        self._desc_label = BodyLabel(self._action.description)
-        self._desc_label.setObjectName("descLabel")
-        self._desc_label.setWordWrap(True)
-        layout.addWidget(self._desc_label, 1)
-        
-        self._delete_btn = PushButton("删除")
-        self._delete_btn.setFixedWidth(60)
-        self._delete_btn.setMinimumHeight(36)
-        self._delete_btn.clicked.connect(self.delete_requested.emit)
-        layout.addWidget(self._delete_btn)
-    
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 2, 0, 2)
+        layout.setSpacing(0)
+
+        self._row = ActionListRow(
+            self._action, self._index,
+            show_delete=True,
+            allow_group_expand=False,
+        )
+        self._row.delete_requested.connect(self.delete_requested.emit)
+        layout.addWidget(self._row)
+
+        self._apply_style(running=False)
+
+    def _apply_style(self, running: bool = False):
+        self.setStyleSheet(flow_action_item_style(running=running))
+
+    def height(self) -> int:
+        return self._row.sizeHint().height() + 4
+
     def update_index(self, index: int):
         self._index = index
-        self._index_label.setText(f"{self._index + 1}")
-    
+        self._row._index = index
+        self._row._index_label.setText(f"{index + 1}")
+
     def set_running(self, running: bool):
         self._is_running = running
+        self._apply_style(running=running)
         if running:
-            from qfluentwidgets import themeColor
-            color = themeColor()
-            highlight_color = color.name()
-            bg_color = f"rgba({color.red()}, {color.green()}, {color.blue()}, 0.2)"
-            
-            self.setStyleSheet(f"""
-                ActionItemWidget {{
-                    background-color: {bg_color};
-                    border: 2px solid {highlight_color};
-                    border-radius: 6px;
-                }}
-                #indexLabel, #descLabel {{
-                    color: {highlight_color};
-                    font-weight: bold;
-                }}
-            """)
+            self._row.set_running(True)
         else:
-            self.setStyleSheet("")
+            self._row.reset()
 
 
 class ActionGroupItemWidget(CardWidget):
@@ -231,11 +214,12 @@ class ScriptTabContent(QWidget):
         self._action_list = ListWidget()
         self._action_list.setSelectionMode(QAbstractItemView.ExtendedSelection)
         self._action_list.setDragDropMode(QAbstractItemView.InternalMove)
+        self._action_list.setStyleSheet(flow_list_style())
         self._action_list.currentRowChanged.connect(self._on_selection_changed)
         self._action_list.model().rowsMoved.connect(self._on_rows_moved)
         self._action_list.setContextMenuPolicy(Qt.CustomContextMenu)
         self._action_list.customContextMenuRequested.connect(self._show_context_menu)
-        layout.addWidget(self._action_list)
+        layout.addWidget(self._action_list, 1)
         
         self._groups_scroll_area = ScrollArea()
         self._groups_scroll_area.setWidgetResizable(True)
@@ -470,9 +454,9 @@ class ScriptTabContent(QWidget):
             if item:
                 widget = ActionItemWidget(action, index)
                 widget.delete_requested.connect(lambda checked=False, idx=index: self._on_delete_requested(idx))
-                item.setSizeHint(widget.sizeHint())
+                item.setSizeHint(QSize(-1, widget.height()))
                 self._action_list.setItemWidget(item, widget)
-            
+
             self.actions_changed.emit()
     
     def set_actions(self, actions: List[ScriptAction]):
@@ -495,9 +479,9 @@ class ScriptTabContent(QWidget):
             item = QListWidgetItem(self._action_list)
             widget = ActionItemWidget(action, i)
             widget.delete_requested.connect(lambda checked=False, idx=i: self._on_delete_requested(idx))
-            item.setSizeHint(widget.sizeHint())
+            item.setSizeHint(QSize(-1, widget.height()))
             self._action_list.setItemWidget(item, widget)
-    
+
     def _on_selection_changed(self, current_row: int):
         self._selected_index = current_row
         if 0 <= current_row < len(self._actions):
@@ -931,7 +915,7 @@ class ScriptTabContent(QWidget):
         return None
 
 
-class ScriptEditor(CardWidget):
+class ScriptEditor(QWidget):
     action_selected = pyqtSignal(object)
     actions_changed = pyqtSignal()
     execute_single = pyqtSignal(int)
@@ -959,16 +943,13 @@ class ScriptEditor(CardWidget):
     
     def _setup_ui(self):
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(16, 16, 16, 16)
-        layout.setSpacing(12)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(8)
         
         header_layout = QHBoxLayout()
-        header = StrongBodyLabel("脚本编辑器")
-        header_layout.addWidget(header)
-        header_layout.addStretch()
-        
-        self._action_count_label = BodyLabel("共 0 个动作")
+        self._action_count_label = BodyLabel("0 个步骤")
         header_layout.addWidget(self._action_count_label)
+        header_layout.addStretch()
         layout.addLayout(header_layout)
         
         self._tab_bar = TabBar()
@@ -977,7 +958,7 @@ class ScriptEditor(CardWidget):
         self._tab_bar.setMovable(True)
         self._tab_bar.setAddButtonVisible(True)
         self._tab_bar.setTabShadowEnabled(False)
-        self._tab_bar.setFixedHeight(48)
+        self._tab_bar.setFixedHeight(40)
         
         self._tab_bar.tabAddRequested.connect(self._on_tab_add_requested)
         self._tab_bar.tabCloseRequested.connect(self._on_tab_close_requested)
@@ -1086,9 +1067,9 @@ class ScriptEditor(CardWidget):
         current_tab = self._get_current_tab()
         if current_tab:
             count = len(current_tab.get_actions())
-            self._action_count_label.setText(f"共 {count} 个动作")
+            self._action_count_label.setText(f"{count} 个步骤")
         else:
-            self._action_count_label.setText("共 0 个动作")
+            self._action_count_label.setText("0 个步骤")
     
     def add_action(self, action: ScriptAction):
         current_tab = self._get_current_tab()
@@ -1385,7 +1366,7 @@ class ActionGroupEditDialog(MessageBoxBase):
             item = QListWidgetItem(self._action_list)
             widget = ActionItemWidget(action, i)
             widget.delete_requested.connect(lambda checked=False, idx=i: self._delete_action_at(idx))
-            item.setSizeHint(widget.sizeHint())
+            item.setSizeHint(QSize(-1, widget.height()))
             self._action_list.setItemWidget(item, widget)
             item.setData(Qt.UserRole, i)
     
@@ -1638,7 +1619,7 @@ class CollapsedActionGroupWidget(CardWidget):
         header_layout.addWidget(self._name_label)
         
         self._count_label = BodyLabel(f"({self._action_count} 个动作)")
-        self._count_label.setStyleSheet("color: #888;")
+        self._count_label.setStyleSheet(muted_caption_style())
         header_layout.addWidget(self._count_label)
         
         header_layout.addStretch()

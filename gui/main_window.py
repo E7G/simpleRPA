@@ -4,18 +4,17 @@ import threading
 import webbrowser
 from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout,
-    QFileDialog, QApplication, QFrame
+    QFileDialog, QApplication, QFrame, QStackedWidget, QSizePolicy,
 )
-from PyQt5.QtCore import Qt, QTimer, pyqtSignal, QEvent
+from PyQt5.QtCore import Qt, QTimer, pyqtSignal
 from typing import List, Optional, Dict
 
 from qfluentwidgets import (
-    FluentWindow, NavigationItemPosition, FluentIcon,
-    PushButton, PrimaryPushButton, SpinBox, DoubleSpinBox,
+    MSFluentWindow, NavigationItemPosition, FluentIcon,
+    PushButton, PrimaryPushButton,
     BodyLabel, StrongBodyLabel,
-    ProgressBar, MessageBox,
-    Pivot, CardWidget, ElevatedCardWidget,
-    setTheme, Theme, setThemeColor, CheckBox
+    ProgressBar, MessageBox, SegmentedWidget,
+    TransparentToolButton, CheckBox,
 )
 
 from core.actions import Action, ActionManager, ActionType
@@ -33,24 +32,16 @@ from .recorder_panel import RecorderPanel
 from .widgets import WindowSelector
 from .command_panel import CommandManagerWidget
 from .dashboard_page import DashboardPage
-from .scheduler_page import SchedulerPage
-from .settings_page import SettingsPage
-from .tray_service import TrayService
-
-
-def _get_icon_path():
-    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    for name in ('icon.ico', 'icon.png'):
-        path = os.path.join(root, name)
-        if os.path.exists(path):
-            return path
-    return None
+from .fluent_theme import (
+    apply_app_theme, AutomatePanel, AutomateToolbar, status_bar_style,
+    create_compact_int_spin, create_compact_float_spin, InlineNumericField,
+)
 
 
 APP_VERSION = "0.1.0"
 
 
-class MainWindow(FluentWindow):
+class MainWindow(MSFluentWindow):
     _update_progress_signal = pyqtSignal(float, int, int)
     _update_state_signal = pyqtSignal(object, str)
     _update_finished_signal = pyqtSignal(bool, str)
@@ -69,8 +60,6 @@ class MainWindow(FluentWindow):
         self._tab_players: Dict[str, Player] = {}
         self._tab_files: Dict[str, Optional[str]] = {}
         self._tab_modified: Dict[str, bool] = {}
-        self._really_quit = False
-        self._tray: Optional[TrayService] = None
         
         self._setup_ui()
         self._setup_navigation()
@@ -92,257 +81,167 @@ class MainWindow(FluentWindow):
         
         self._update_checker = UpdateChecker(APP_VERSION)
         self._check_for_update()
-        self._setup_tray()
-        self._apply_startup_visibility()
     
     def _setup_ui(self):
-        theme_map = {'auto': Theme.AUTO, 'light': Theme.LIGHT, 'dark': Theme.DARK}
-        setTheme(theme_map.get(self._config.theme, Theme.AUTO))
-        setThemeColor('#0078d4')
+        apply_app_theme()
         
-        font = QApplication.font()
-        font.setPointSize(15)
-        QApplication.setFont(font)
-        
-        self.setWindowTitle("SimpleRPA - RPA自动化工具")
+        self.setWindowTitle("SimpleRPA")
         self.setMinimumSize(1280, 850)
         
         self.dashboardInterface = DashboardPage()
         self.dashboardInterface.setObjectName('dashboardInterface')
         self.addSubInterface(
-            self.dashboardInterface, FluentIcon.PLAY, '执行面板'
-        )
-        
-        self.schedulerInterface = SchedulerPage()
-        self.schedulerInterface.setObjectName('schedulerInterface')
-        self.addSubInterface(
-            self.schedulerInterface, FluentIcon.CALENDAR, '定时任务'
+            self.dashboardInterface, FluentIcon.HOME, '控制台'
         )
         
         self.homeInterface = QWidget()
         self.homeInterface.setObjectName('homeInterface')
         self.addSubInterface(
-            self.homeInterface, FluentIcon.EDIT, '编辑器'
+            self.homeInterface, FluentIcon.EDIT, '流程设计器'
         )
         
         self.commandInterface = QWidget()
         self.commandInterface.setObjectName('commandInterface')
         self.addSubInterface(
-            self.commandInterface, FluentIcon.APPLICATION, '命令管理'
+            self.commandInterface, FluentIcon.APPLICATION, '启动命令'
         )
         
         self._setup_command_interface()
+        self._setup_designer_interface()
+    
+    def _setup_designer_interface(self):
+        root = QVBoxLayout(self.homeInterface)
+        root.setContentsMargins(12, 12, 12, 8)
+        root.setSpacing(8)
         
-        self.settingsInterface = SettingsPage()
-        self.settingsInterface.setObjectName('settingsInterface')
-        self.addSubInterface(
-            self.settingsInterface, FluentIcon.SETTING, '设置',
-            position=NavigationItemPosition.BOTTOM
-        )
-        self.settingsInterface.settings_changed.connect(self._on_settings_changed)
-        
-        main_layout = QVBoxLayout(self.homeInterface)
-        main_layout.setContentsMargins(24, 20, 24, 24)
-        main_layout.setSpacing(16)
-        
-        control_card = ElevatedCardWidget(self.homeInterface)
-        control_layout = QHBoxLayout(control_card)
-        control_layout.setContentsMargins(20, 16, 20, 16)
-        control_layout.setSpacing(24)
-        
-        window_group = QVBoxLayout()
-        window_group.setSpacing(8)
-        window_label = StrongBodyLabel("目标窗口")
-        window_group.addWidget(window_label)
+        toolbar = AutomateToolbar(self.homeInterface)
+        tb = toolbar._layout
         
         self._window_selector = WindowSelector()
-        self._window_selector.setMinimumWidth(220)
+        self._window_selector.setMinimumWidth(200)
         self._window_selector.refresh_windows()
-        window_group.addWidget(self._window_selector)
-        control_layout.addLayout(window_group)
+        tb.addWidget(self._window_selector)
         
-        speed_group = QVBoxLayout()
-        speed_group.setSpacing(8)
-        speed_label = StrongBodyLabel("执行速度")
-        speed_group.addWidget(speed_label)
+        tb.addWidget(self._vline())
         
-        self._speed_spin = DoubleSpinBox()
-        self._speed_spin.setRange(0.1, 10.0)
-        self._speed_spin.setSingleStep(0.1)
-        self._speed_spin.setValue(self._config.default_speed)
-        self._speed_spin.setSuffix(" 倍")
-        self._speed_spin.setMinimumWidth(120)
-        self._speed_spin.setMinimumHeight(32)
-        speed_group.addWidget(self._speed_spin)
-        control_layout.addLayout(speed_group)
+        self._speed_spin = create_compact_float_spin(
+            0.1, 10.0, self._config.default_speed, suffix="x", width=76,
+        )
+        tb.addWidget(InlineNumericField("速度", self._speed_spin))
         
-        repeat_group = QVBoxLayout()
-        repeat_group.setSpacing(8)
-        repeat_label = StrongBodyLabel("重复次数")
-        repeat_group.addWidget(repeat_label)
+        self._repeat_spin = create_compact_int_spin(
+            1, 999, self._config.default_repeat_count, width=68,
+        )
+        tb.addWidget(InlineNumericField("重复", self._repeat_spin))
         
-        self._repeat_spin = SpinBox()
-        self._repeat_spin.setRange(1, 999)
-        self._repeat_spin.setValue(self._config.default_repeat_count)
-        self._repeat_spin.setMinimumWidth(120)
-        self._repeat_spin.setMinimumHeight(32)
-        repeat_group.addWidget(self._repeat_spin)
-        
-        self._infinite_cb = CheckBox("无限循环")
+        self._infinite_cb = CheckBox("无限")
         self._infinite_cb.stateChanged.connect(self._on_infinite_changed)
-        repeat_group.addWidget(self._infinite_cb)
-        control_layout.addLayout(repeat_group)
+        tb.addWidget(self._infinite_cb)
         
-        timeout_group = QVBoxLayout()
-        timeout_group.setSpacing(8)
-        timeout_label = StrongBodyLabel("超时设置")
-        timeout_group.addWidget(timeout_label)
+        self._timeout_spin = create_compact_float_spin(
+            0, 3600, 0, step=1, suffix="s", width=76,
+        )
+        self._timeout_spin.setSpecialValueText("∞")
+        tb.addWidget(InlineNumericField("超时", self._timeout_spin))
         
-        self._timeout_spin = DoubleSpinBox()
-        self._timeout_spin.setRange(0, 3600)
-        self._timeout_spin.setValue(0)
-        self._timeout_spin.setSuffix(" 秒")
-        self._timeout_spin.setSpecialValueText("不限制")
-        self._timeout_spin.setMinimumWidth(120)
-        self._timeout_spin.setMinimumHeight(32)
-        timeout_group.addWidget(self._timeout_spin)
-        control_layout.addLayout(timeout_group)
+        tb.addStretch()
         
-        control_layout.addStretch()
-        
-        btn_layout = QVBoxLayout()
-        btn_layout.setSpacing(8)
-        
-        run_pause_layout = QHBoxLayout()
-        run_pause_layout.setSpacing(8)
-        
-        self._run_btn = PrimaryPushButton("运行")
-        self._run_btn.setMinimumSize(100, 40)
+        self._run_btn = PrimaryPushButton(FluentIcon.PLAY, "运行")
+        self._run_btn.setFixedHeight(28)
         self._run_btn.clicked.connect(self._run_script)
-        run_pause_layout.addWidget(self._run_btn)
+        tb.addWidget(self._run_btn)
         
-        self._pause_btn = PushButton("暂停")
-        self._pause_btn.setMinimumSize(100, 40)
+        self._pause_btn = PushButton(FluentIcon.PAUSE, "暂停")
+        self._pause_btn.setFixedHeight(28)
         self._pause_btn.clicked.connect(self._pause_script)
         self._pause_btn.setEnabled(False)
-        run_pause_layout.addWidget(self._pause_btn)
+        tb.addWidget(self._pause_btn)
         
-        btn_layout.addLayout(run_pause_layout)
-        
-        self._stop_btn = PushButton("停止")
-        self._stop_btn.setMinimumSize(208, 40)
+        self._stop_btn = PushButton(FluentIcon.CANCEL, "停止")
+        self._stop_btn.setFixedHeight(28)
         self._stop_btn.clicked.connect(self._stop_script)
         self._stop_btn.setEnabled(False)
-        btn_layout.addWidget(self._stop_btn)
+        tb.addWidget(self._stop_btn)
         
-        control_layout.addLayout(btn_layout)
+        root.addWidget(toolbar)
         
-        main_layout.addWidget(control_card)
+        columns = QHBoxLayout()
+        columns.setSpacing(8)
         
-        content_layout = QHBoxLayout()
-        content_layout.setSpacing(16)
-        
-        left_card = CardWidget()
-        left_layout = QVBoxLayout(left_card)
-        left_layout.setContentsMargins(8, 8, 8, 8)
-        
-        self._pivot = Pivot()
-        self._pivot.addItem(routeKey='actions', text='动作列表')
-        self._pivot.addItem(routeKey='recorder', text='录制控制')
-        left_layout.addWidget(self._pivot)
+        left_panel = AutomatePanel("", self.homeInterface)
+        left_panel.setMinimumWidth(260)
+        left_panel.setMaximumWidth(320)
         
         self._action_panel = ActionPanel()
         self._recorder_panel = RecorderPanel()
+        for panel in (self._action_panel, self._recorder_panel):
+            panel.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+
+        self._left_stack = QStackedWidget()
+        self._left_stack.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self._left_stack.addWidget(self._action_panel)
+        self._left_stack.addWidget(self._recorder_panel)
+        left_panel.content_layout.addWidget(self._left_stack, 1)
+
+        self._left_segment = SegmentedWidget(self.homeInterface)
+        self._left_segment.addItem('actions', '操作库', lambda: self._show_left_panel('actions'))
+        self._left_segment.addItem('recorder', '录制', lambda: self._show_left_panel('recorder'))
+        self._left_segment.currentItemChanged.connect(self._show_left_panel)
+        left_panel.add_header_widget(self._left_segment)
+        self._left_segment.blockSignals(True)
+        self._left_segment.setCurrentItem('actions')
+        self._left_segment.blockSignals(False)
+        self._show_left_panel('actions')
         
-        self._action_panel.hide()
-        self._recorder_panel.hide()
-        left_layout.addWidget(self._action_panel)
-        left_layout.addWidget(self._recorder_panel)
+        columns.addWidget(left_panel)
         
-        self._pivot.currentItemChanged.connect(self._on_pivot_changed)
-        self._pivot.setCurrentItem('actions')
-        
-        content_layout.addWidget(left_card, 1)
-        
+        flow_panel = AutomatePanel("流程", self.homeInterface, canvas=True)
         self._script_editor = ScriptEditor()
-        content_layout.addWidget(self._script_editor, 2)
+        flow_panel.content_layout.addWidget(self._script_editor)
+        columns.addWidget(flow_panel, 1)
         
+        props_panel = AutomatePanel("属性", self.homeInterface)
+        props_panel.setMinimumWidth(280)
+        props_panel.setMaximumWidth(380)
         self._property_panel = PropertyPanel()
-        content_layout.addWidget(self._property_panel, 1)
+        props_panel.content_layout.addWidget(self._property_panel)
+        columns.addWidget(props_panel)
         
-        main_layout.addLayout(content_layout, 1)
+        root.addLayout(columns, 1)
         
         self._progress_bar = ProgressBar()
-        self._progress_bar.setFixedHeight(4)
+        self._progress_bar.setFixedHeight(3)
         self._progress_bar.setVisible(False)
-        main_layout.addWidget(self._progress_bar)
+        root.addWidget(self._progress_bar)
         
         self._status_bar = QWidget()
+        self._status_bar.setObjectName("statusBar")
+        self._status_bar.setFixedHeight(28)
+        self._status_bar.setStyleSheet(status_bar_style())
         status_layout = QHBoxLayout(self._status_bar)
-        status_layout.setContentsMargins(16, 8, 16, 8)
+        status_layout.setContentsMargins(12, 0, 12, 0)
         
         self._status_label = BodyLabel("就绪")
         status_layout.addWidget(self._status_label)
-        
         status_layout.addStretch()
-        
         self._coord_label = BodyLabel("屏幕坐标: (0, 0)")
         status_layout.addWidget(self._coord_label)
-        
-        main_layout.addWidget(self._status_bar)
+        root.addWidget(self._status_bar)
     
-    def _setup_tray(self):
-        if not self._config.tray_enabled:
+    def _vline(self) -> QFrame:
+        line = QFrame()
+        line.setFrameShape(QFrame.VLine)
+        line.setFixedWidth(1)
+        line.setStyleSheet("color: rgba(128,128,128,0.3);")
+        return line
+    
+    def _show_left_panel(self, key: str):
+        if not hasattr(self, '_left_stack'):
             return
-        self._tray = TrayService(self)
-        if self._tray.setup(self, _get_icon_path()):
-            from utils.notification import set_tray_notifier
-            set_tray_notifier(self._tray)
-            self._tray.show_window_requested.connect(self._show_from_tray)
-            self._tray.hide_window_requested.connect(self.hide)
-            self._tray.run_dashboard_requested.connect(self._tray_run_dashboard)
-            self._tray.open_scheduler_requested.connect(self._tray_open_scheduler)
-            self._tray.quit_requested.connect(self._quit_from_tray)
-    
-    def _apply_startup_visibility(self):
-        if self._config.start_minimized and self._tray and self._tray.is_visible:
-            self.hide()
-    
-    def _on_settings_changed(self):
-        self.settingsInterface.apply_theme()
-        if self._config.tray_enabled and (not self._tray or not self._tray.is_visible):
-            self._setup_tray()
-    
-    def _show_from_tray(self):
-        self.show()
-        self.raise_()
-        self.activateWindow()
-    
-    def _tray_run_dashboard(self):
-        self._show_from_tray()
-        self.switchTo(self.dashboardInterface)
-        if hasattr(self.dashboardInterface, '_run_all'):
-            self.dashboardInterface._run_all()
-    
-    def _tray_open_scheduler(self):
-        self._show_from_tray()
-        self.switchTo(self.schedulerInterface)
-    
-    def _quit_from_tray(self):
-        self._really_quit = True
-        self.close()
-    
-    def changeEvent(self, event):
-        if (
-            event.type() == QEvent.WindowStateChange
-            and self.isMinimized()
-            and self._config.minimize_to_tray
-            and self._config.tray_enabled
-            and self._tray
-            and self._tray.is_visible
-        ):
-            QTimer.singleShot(0, self.hide)
-        super().changeEvent(event)
+        if key == 'recorder':
+            self._left_stack.setCurrentWidget(self._recorder_panel)
+        else:
+            self._left_stack.setCurrentWidget(self._action_panel)
     
     def _setup_navigation(self):
         self.navigationInterface.addItem(
@@ -369,13 +268,9 @@ class MainWindow(FluentWindow):
             position=NavigationItemPosition.BOTTOM
         )
     
-    def _on_pivot_changed(self, key: str):
-        self._action_panel.setVisible(key == 'actions')
-        self._recorder_panel.setVisible(key == 'recorder')
-    
     def _setup_command_interface(self):
         layout = QVBoxLayout(self.commandInterface)
-        layout.setContentsMargins(24, 20, 24, 24)
+        layout.setContentsMargins(12, 12, 12, 12)
         layout.setSpacing(16)
         
         self._command_panel = CommandManagerWidget()
@@ -597,22 +492,6 @@ class MainWindow(FluentWindow):
         self._config.save()
     
     def closeEvent(self, event):
-        if (
-            not self._really_quit
-            and self._config.close_to_tray
-            and self._config.tray_enabled
-            and self._tray
-            and self._tray.is_visible
-        ):
-            event.ignore()
-            self.hide()
-            if self._tray:
-                self._tray.show_message(
-                    "SimpleRPA",
-                    "程序已最小化到托盘，双击图标可恢复窗口",
-                )
-            return
-        
         has_unsaved = any(self._tab_modified.values())
         if has_unsaved:
             box = MessageBox('保存更改', '有未保存的脚本，是否保存?', self)
@@ -627,13 +506,7 @@ class MainWindow(FluentWindow):
         self._recorder_panel.stop_recording()
         for player in self._tab_players.values():
             player.stop_and_wait(timeout=1.0)
-        if hasattr(self, 'schedulerInterface'):
-            self.schedulerInterface.save_tasks()
-        from core.scheduler import SchedulerService
-        SchedulerService.get_instance().stop()
         self._save_settings()
-        if self._tray:
-            self._tray.hide()
         event.accept()
     
     def _update_mouse_position(self):
@@ -683,7 +556,7 @@ class MainWindow(FluentWindow):
         self._update_window_title()
     
     def _update_window_title(self):
-        title = "SimpleRPA - RPA自动化工具"
+        title = "SimpleRPA"
         current_file = self._get_current_tab_file()
         if current_file:
             title = f"{os.path.basename(current_file)} - {title}"
@@ -1224,14 +1097,12 @@ class MainWindow(FluentWindow):
                     total_actions = len(player.actions)
                     total_repeats = player.current_repeat
                     self._status_label.setText(f"执行完成 | 共 {total_actions} 个动作，{total_repeats} 轮")
-                    if self._config.notify_on_complete:
-                        from utils.notification import send_notification
-                        send_notification("SimpleRPA 执行完成", f"已完成 {total_actions} 个动作，共 {total_repeats} 轮")
+                    from utils.notification import send_notification
+                    send_notification("SimpleRPA 执行完成", f"已完成 {total_actions} 个动作，共 {total_repeats} 轮")
                 else:
                     self._status_label.setText("执行完成")
-                    if self._config.notify_on_complete:
-                        from utils.notification import send_notification
-                        send_notification("SimpleRPA 执行完成", "脚本执行完成")
+                    from utils.notification import send_notification
+                    send_notification("SimpleRPA 执行完成", "脚本执行完成")
             else:
                 if player:
                     self._status_label.setText(f"执行中断 | 已完成 {player.current_index} 个动作")

@@ -11,14 +11,15 @@ from core.actions import Action, ActionType, ActionManager, VariableManager
 from qfluentwidgets import (
     StrongBodyLabel, BodyLabel, PushButton,
     SpinBox, DoubleSpinBox, LineEdit, ComboBox,
-    ScrollArea, MessageBox, CardWidget, CheckBox
+    ScrollArea, MessageBox, CheckBox, CaptionLabel,
 )
 
 from .widgets import CoordinateWidget, KeySequenceDialog, CaptureWidget, DragCoordinateWidget
+from .fluent_theme import muted_caption_style
 from .preview_overlay import PreviewOverlay
 
 
-class PropertyPanel(CardWidget):
+class PropertyPanel(QWidget):
     action_updated = pyqtSignal(object)
     variables_changed = pyqtSignal()
     
@@ -62,11 +63,8 @@ class PropertyPanel(CardWidget):
     
     def _setup_ui(self):
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(16, 16, 16, 16)
-        layout.setSpacing(12)
-        
-        header = StrongBodyLabel("属性面板")
-        layout.addWidget(header)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(8)
         
         self._scroll_area = ScrollArea()
         self._scroll_area.setWidgetResizable(True)
@@ -81,7 +79,7 @@ class PropertyPanel(CardWidget):
         
         layout.addWidget(self._scroll_area)
         
-        self._placeholder = BodyLabel("选择一个动作以编辑其属性")
+        self._placeholder = CaptionLabel("选择流程中的步骤以编辑属性")
         self._placeholder.setAlignment(Qt.AlignCenter)
         self._content_layout.addWidget(self._placeholder)
     
@@ -123,7 +121,7 @@ class PropertyPanel(CardWidget):
         self._clear_content()
         
         if not self._current_action:
-            self._placeholder = BodyLabel("选择一个动作以编辑其属性")
+            self._placeholder = CaptionLabel("选择流程中的步骤以编辑属性")
             self._placeholder.setAlignment(Qt.AlignCenter)
             self._content_layout.addWidget(self._placeholder)
             return
@@ -324,7 +322,7 @@ class PropertyPanel(CardWidget):
             current_marker = self._current_action.condition_marker
             if current_marker:
                 info_label = BodyLabel(f"💡 此动作将生成条件标记: {current_marker}")
-                info_label.setStyleSheet("color: #666; font-size: 11px;")
+                info_label.setStyleSheet(muted_caption_style("font-size: 11px;"))
                 self._content_layout.addWidget(info_label)
     
     def _on_var_selected(self, index):
@@ -347,7 +345,7 @@ class PropertyPanel(CardWidget):
         self._content_layout.addWidget(bg_checkbox)
         
         info_label = BodyLabel("💡 后台模式: 不激活窗口即可操作")
-        info_label.setStyleSheet("color: #666; font-size: 11px;")
+        info_label.setStyleSheet(muted_caption_style("font-size: 11px;"))
         self._content_layout.addWidget(info_label)
         
         if self._current_action.action_type == ActionType.MOUSE_CLICK_RELATIVE:

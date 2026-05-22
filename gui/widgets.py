@@ -12,6 +12,8 @@ from qfluentwidgets import (
     SpinBox, DoubleSpinBox, ComboBox, LineEdit
 )
 
+from .fluent_theme import muted_caption_style
+
 
 class CoordinateWidget(QWidget):
     coordinates_changed = pyqtSignal(int, int)
@@ -57,7 +59,7 @@ class CoordinateWidget(QWidget):
         
         if self._window_offset:
             info_label = BodyLabel("💡 将拾取窗口内相对坐标")
-            info_label.setStyleSheet("color: #666; font-size: 11px;")
+            info_label.setStyleSheet(muted_caption_style("font-size: 11px;"))
             layout.addWidget(info_label)
     
     def set_window_offset(self, offset: Optional[Tuple[int, int]]):
@@ -166,7 +168,7 @@ class DragCoordinateWidget(QWidget):
         layout.addWidget(title_label)
         
         self._info_label = BodyLabel("未选择区域")
-        self._info_label.setStyleSheet("color: gray;")
+        self._info_label.setStyleSheet(muted_caption_style())
         layout.addWidget(self._info_label)
         
         self._pick_btn = PushButton("框选区域")
@@ -528,7 +530,7 @@ class WindowPickerDialog(QDialog):
         layout.addWidget(title_label)
         
         tip_label = CaptionLabel("点击列表中的窗口或使用\"拾取\"按钮选择")
-        tip_label.setStyleSheet("color: #666;")
+        tip_label.setStyleSheet(muted_caption_style())
         layout.addWidget(tip_label)
         
         from qfluentwidgets import ListWidget

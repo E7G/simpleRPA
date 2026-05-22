@@ -30,16 +30,6 @@ class Config:
     
     last_dashboard_list: str = ''
     
-    tray_enabled: bool = True
-    minimize_to_tray: bool = True
-    close_to_tray: bool = True
-    start_minimized: bool = False
-    notify_on_complete: bool = True
-    notify_on_schedule: bool = True
-    scheduler_auto_start: bool = True
-    scheduler_check_interval: int = 30
-    scheduled_tasks: list = field(default_factory=list)
-    
     _config_path: str = field(default='', repr=False)
     
     def __post_init__(self):
@@ -76,15 +66,6 @@ class Config:
                 'infinite_loop': self.infinite_loop,
                 'timeout_seconds': self.timeout_seconds,
                 'last_dashboard_list': self.last_dashboard_list,
-                'tray_enabled': self.tray_enabled,
-                'minimize_to_tray': self.minimize_to_tray,
-                'close_to_tray': self.close_to_tray,
-                'start_minimized': self.start_minimized,
-                'notify_on_complete': self.notify_on_complete,
-                'notify_on_schedule': self.notify_on_schedule,
-                'scheduler_auto_start': self.scheduler_auto_start,
-                'scheduler_check_interval': self.scheduler_check_interval,
-                'scheduled_tasks': self.scheduled_tasks,
             }
             
             with open(save_path, 'w', encoding='utf-8') as f:
@@ -126,15 +107,6 @@ class Config:
             self.infinite_loop = data.get('infinite_loop', False)
             self.timeout_seconds = data.get('timeout_seconds', 0)
             self.last_dashboard_list = data.get('last_dashboard_list', '')
-            self.tray_enabled = data.get('tray_enabled', True)
-            self.minimize_to_tray = data.get('minimize_to_tray', True)
-            self.close_to_tray = data.get('close_to_tray', True)
-            self.start_minimized = data.get('start_minimized', False)
-            self.notify_on_complete = data.get('notify_on_complete', True)
-            self.notify_on_schedule = data.get('notify_on_schedule', True)
-            self.scheduler_auto_start = data.get('scheduler_auto_start', True)
-            self.scheduler_check_interval = data.get('scheduler_check_interval', 30)
-            self.scheduled_tasks = data.get('scheduled_tasks', [])
             
             return True
         except Exception as e:

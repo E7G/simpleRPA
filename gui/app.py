@@ -2,7 +2,7 @@ import sys
 import os
 from PyQt5.QtWidgets import QApplication, QSplashScreen
 from PyQt5.QtCore import Qt
-from PyQt5.QtGui import QIcon, QPixmap, QPainter, QFont, QColor
+from PyQt5.QtGui import QIcon, QPixmap, QPainter, QFont, QColor, QLinearGradient
 
 
 def get_icon_path():
@@ -16,17 +16,23 @@ def get_icon_path():
 
 
 def _create_splash():
-    pixmap = QPixmap(480, 240)
-    pixmap.fill(QColor(0, 120, 212))
+    w, h = 480, 200
+    pixmap = QPixmap(w, h)
+    pixmap.fill(Qt.transparent)
     painter = QPainter(pixmap)
+    painter.setRenderHint(QPainter.Antialiasing)
+    grad = QLinearGradient(0, 0, w, h)
+    grad.setColorAt(0, QColor(0, 120, 212))
+    grad.setColorAt(1, QColor(116, 39, 116))
+    painter.fillRect(0, 0, w, h, grad)
     painter.setPen(QColor(255, 255, 255))
-    font = QFont("Microsoft YaHei", 24, QFont.Bold)
+    font = QFont("Segoe UI", 26, QFont.Bold)
     painter.setFont(font)
-    painter.drawText(pixmap.rect().adjusted(0, -30, 0, 0), Qt.AlignCenter, "SimpleRPA")
-    font2 = QFont("Microsoft YaHei", 11)
+    painter.drawText(pixmap.rect().adjusted(0, -24, 0, 0), Qt.AlignCenter, "SimpleRPA")
+    font2 = QFont("Segoe UI", 10)
     painter.setFont(font2)
-    painter.setPen(QColor(200, 230, 255))
-    painter.drawText(pixmap.rect().adjusted(0, 30, 0, 0), Qt.AlignCenter, "RPA \u81ea\u52a8\u5316\u5de5\u5177")
+    painter.setPen(QColor(230, 230, 255))
+    painter.drawText(pixmap.rect().adjusted(0, 28, 0, 0), Qt.AlignCenter, "桌面流程自动化")
     painter.end()
     return pixmap
 
@@ -46,8 +52,10 @@ def run_app():
     splash.showMessage("\u6b63\u5728\u52a0\u8f7d...", Qt.AlignBottom | Qt.AlignHCenter, Qt.white)
     app.processEvents()
     
+    from gui.fluent_theme import apply_app_theme
     from gui.main_window import MainWindow
     
+    apply_app_theme()
     window = MainWindow()
     window.show()
     splash.finish(window)

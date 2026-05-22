@@ -1,15 +1,15 @@
-from PyQt5.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QScrollArea
+from PyQt5.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QScrollArea, QSizePolicy
 from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtGui import QColor
 from core.recorder import Recorder, RecordConfig, RecordState
 
 from qfluentwidgets import (
     StrongBodyLabel, BodyLabel, PushButton, PrimaryPushButton,
-    CheckBox, SpinBox, DoubleSpinBox, ScrollArea, CardWidget
+    CheckBox, SpinBox, DoubleSpinBox, ScrollArea, FluentIcon,
 )
 
 
-class RecorderPanel(CardWidget):
+class RecorderPanel(QWidget):
     recording_started = pyqtSignal()
     recording_stopped = pyqtSignal()
     action_recorded = pyqtSignal(object)
@@ -23,25 +23,21 @@ class RecorderPanel(CardWidget):
         self._connect_signals()
     
     def _setup_ui(self):
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         main_layout = QVBoxLayout(self)
         main_layout.setContentsMargins(0, 0, 0, 0)
-        main_layout.setSpacing(0)
-        
+        main_layout.setSpacing(8)
+
         scroll_area = ScrollArea()
         scroll_area.setWidgetResizable(True)
         scroll_area.setStyleSheet("QScrollArea{border: none; background: transparent;}")
-        
+        scroll_area.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+
         content_widget = QWidget()
         content_widget.setStyleSheet("background: transparent;")
         layout = QVBoxLayout(content_widget)
-        layout.setContentsMargins(16, 16, 16, 16)
-        layout.setSpacing(12)
-        
-        header_layout = QHBoxLayout()
-        header = StrongBodyLabel("录制控制")
-        header_layout.addWidget(header)
-        header_layout.addStretch()
-        layout.addLayout(header_layout)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(10)
         
         self._status_label = StrongBodyLabel("就绪")
         self._status_label.setAlignment(Qt.AlignCenter)
@@ -53,8 +49,8 @@ class RecorderPanel(CardWidget):
         
         layout.addSpacing(8)
         
-        self._start_btn = PrimaryPushButton("开始录制")
-        self._start_btn.setMinimumHeight(40)
+        self._start_btn = PrimaryPushButton(FluentIcon.VIDEO, "开始录制")
+        self._start_btn.setMinimumHeight(36)
         self._start_btn.clicked.connect(self._toggle_recording)
         layout.addWidget(self._start_btn)
         
@@ -122,9 +118,9 @@ class RecorderPanel(CardWidget):
         layout.addWidget(self._image_size_spin)
         
         layout.addStretch()
-        
+
         scroll_area.setWidget(content_widget)
-        main_layout.addWidget(scroll_area)
+        main_layout.addWidget(scroll_area, 1)
         
         self._update_config()
         

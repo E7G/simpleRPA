@@ -16,6 +16,7 @@ from qfluentwidgets import (
 )
 
 from core.actions import Action, ActionType
+from core.action_group import LocalActionGroupManager
 from core.player import Player, PlayerState
 from core.exporter import Exporter
 from core.command_manager import CommandManager
@@ -907,20 +908,27 @@ class DashboardPage(QWidget):
             
             self._scripts.clear()
             for s in data.get('scripts', []):
-                result = Exporter.import_from_json(s['path'])
-                if result:
-                    actions = result if isinstance(result, list) else result.get('actions', [])
-                    
-                    item = ScriptItem(
-                        id=s['id'],
-                        name=s['name'],
-                        path=s['path'],
-                        actions=actions,
-                        delay_before=s.get('delay_before', 0),
-                        repeat_count=s.get('repeat_count', 1),
-                        enabled=s.get('enabled', True)
-                    )
-                    self._scripts.append(item)
+                script_path = s.get('path', '')
+                if not script_path or not os.path.exists(script_path):
+                    continue
+                local_group_manager = LocalActionGroupManager()
+                result = Exporter.import_from_json(script_path, local_group_manager)
+                if result is None:
+                    continue
+                actions = result if isinstance(result, list) else result.get('actions', [])
+                if not actions:
+                    continue
+                item = ScriptItem(
+                    id=s['id'],
+                    name=s['name'],
+                    path=script_path,
+                    actions=actions,
+                    delay_before=s.get('delay_before', 0),
+                    repeat_count=s.get('repeat_count', 1),
+                    enabled=s.get('enabled', True)
+                )
+                item._local_group_manager = local_group_manager
+                self._scripts.append(item)
             
             window_info = data.get('window', {})
             if window_info:
@@ -1343,7 +1351,6 @@ class DashboardPage(QWidget):
     
     def _execute_script(self, item: ScriptItem):
         import time
-        from core.action_group import LocalActionGroupManager
         
         if item.delay_before > 0:
             time.sleep(item.delay_before)
@@ -1411,7 +1418,7 @@ class DashboardPage(QWidget):
                         self._show_error_signal.emit(f"启动命令执行失败: {message}")
                         return
         
-        local_group_manager = LocalActionGroupManager()
+        local_group_manager = getattr(item, '_local_group_manager', None) or LocalActionGroupManager()
         result = Exporter.import_from_json(item.path, local_group_manager)
         if not result:
             return

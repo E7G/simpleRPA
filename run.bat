@@ -1,1 +1,2 @@
 pixi run start
+pause

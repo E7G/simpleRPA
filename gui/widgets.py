@@ -15,6 +15,32 @@ from qfluentwidgets import (
 from .fluent_theme import muted_caption_style
 
 
+def get_physical_cursor_pos(fallback_point=None) -> Tuple[int, int]:
+    """返回物理像素下的鼠标坐标，与 pyautogui 回放保持同一坐标系。
+
+    开启高 DPI 缩放(AA_EnableHighDpiScaling)后，Qt 的 event.globalPos()
+    返回的是逻辑像素；而 pyautogui / win32(ClientToScreen 等)都使用物理像素。
+    在缩放比 ≠100% 的屏幕上直接用逻辑坐标拾取会按 DPI 比例偏移，
+    因此拾取时改为在鼠标事件发生的瞬间直接读取系统物理光标坐标。
+    """
+    if sys.platform == 'win32':
+        try:
+            import win32api
+            return win32api.GetCursorPos()
+        except Exception:
+            try:
+                import ctypes
+                from ctypes import wintypes
+                pt = wintypes.POINT()
+                if ctypes.windll.user32.GetCursorPos(ctypes.byref(pt)):
+                    return (pt.x, pt.y)
+            except Exception:
+                pass
+    if fallback_point is not None:
+        return (fallback_point.x(), fallback_point.y())
+    return (0, 0)
+
+
 class CoordinateWidget(QWidget):
     coordinates_changed = pyqtSignal(int, int)
     
@@ -132,14 +158,14 @@ class ScreenPickWidget(QWidget):
     
     def mousePressEvent(self, event):
         if event.button() == Qt.LeftButton:
-            global_pos = event.globalPos()
-            x = global_pos.x()
-            y = global_pos.y()
-            
+            # 用物理像素光标坐标，与 pyautogui 回放及窗口偏移(ClientToScreen)同一坐标系，
+            # 避免高 DPI 缩放下 event.globalPos() 的逻辑坐标导致拾取偏移。
+            x, y = get_physical_cursor_pos(event.globalPos())
+
             if self._window_offset:
                 x = x - self._window_offset[0]
                 y = y - self._window_offset[1]
-            
+
             self.position_picked.emit(x, y)
             self.close()
         elif event.button() == Qt.RightButton:
@@ -737,6 +763,10 @@ class CaptureWidget(QWidget):
         super().__init__(parent)
         self._start_pos = None
         self._end_pos = None
+        # 物理像素坐标：用于输出截图区域，与 pyautogui.screenshot(region=...) 同一坐标系。
+        # _start_pos/_end_pos 仍用逻辑坐标，仅用于在本控件上绘制选框。
+        self._start_phys = None
+        self._end_phys = None
         self._screen_pixmap = None
         
         self.setWindowFlags(Qt.Window | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
@@ -788,22 +818,30 @@ class CaptureWidget(QWidget):
         if event.button() == Qt.LeftButton:
             self._start_pos = event.globalPos()
             self._end_pos = event.globalPos()
+            self._start_phys = get_physical_cursor_pos(event.globalPos())
+            self._end_phys = self._start_phys
             self.update()
         elif event.button() == Qt.RightButton:
             self.close()
-    
+
     def mouseMoveEvent(self, event):
         if self._start_pos:
             self._end_pos = event.globalPos()
+            self._end_phys = get_physical_cursor_pos(event.globalPos())
             self.update()
-    
+
     def mouseReleaseEvent(self, event):
         if event.button() == Qt.LeftButton and self._start_pos and self._end_pos:
             rect = QRect(self._start_pos, self._end_pos).normalized()
-            
+
             if rect.width() > 10 and rect.height() > 10:
-                self.captured.emit(rect)
-            
+                # 输出物理像素区域，与 pyautogui.screenshot(region=...) 同一坐标系，
+                # 避免高 DPI 缩放下逻辑坐标导致截图区域错位/尺寸不符。
+                sx, sy = self._start_phys or (rect.x(), rect.y())
+                ex, ey = self._end_phys or (rect.x() + rect.width(), rect.y() + rect.height())
+                phys_rect = QRect(QPoint(sx, sy), QPoint(ex, ey)).normalized()
+                self.captured.emit(phys_rect)
+
             self.close()
     
     def keyPressEvent(self, event):

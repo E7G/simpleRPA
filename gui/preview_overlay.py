@@ -59,26 +59,53 @@ class PreviewOverlay(QWidget):
         else:
             self.showFullScreen()
     
+    def _phys_to_widget(self, sx: int, sy: int) -> Tuple[int, int]:
+        """物理屏幕坐标 → 本控件内的逻辑坐标。
+
+        动作里保存的坐标是物理像素(与 pyautogui 回放一致)，
+        但开启高 DPI 缩放后 QPainter 在逻辑像素下绘制，且本覆盖层的
+        geometry 也是逻辑坐标。若直接用物理坐标绘制，在缩放比 ≠100%
+        的屏幕上标记会偏移甚至跑到画布外。这里按 devicePixelRatio
+        换算，并减去覆盖层自身的逻辑原点(多显示器虚拟桌面左上角)。
+        """
+        dpr = 1.0
+        try:
+            screen = QGuiApplication.primaryScreen()
+            if screen:
+                dpr = screen.devicePixelRatio() or 1.0
+        except Exception:
+            dpr = 1.0
+        geo = self.geometry()
+        lx = int(round(sx / dpr)) - geo.x()
+        ly = int(round(sy / dpr)) - geo.y()
+        return (lx, ly)
+
     def show_click_position(self, x: int, y: int, label: str = ""):
         self._preview_type = 'click'
+        x, y = self._phys_to_widget(x, y)
         self._preview_data = {'x': x, 'y': y, 'label': label}
         self._start_preview()
-    
+
     def show_drag_line(self, start_x: int, start_y: int, end_x: int, end_y: int):
         self._preview_type = 'drag'
+        start_x, start_y = self._phys_to_widget(start_x, start_y)
+        end_x, end_y = self._phys_to_widget(end_x, end_y)
         self._preview_data = {
             'start_x': start_x, 'start_y': start_y,
             'end_x': end_x, 'end_y': end_y
         }
         self._start_preview()
-    
+
     def show_region(self, x: int, y: int, width: int, height: int, label: str = ""):
         self._preview_type = 'region'
-        self._preview_data = {'x': x, 'y': y, 'width': width, 'height': height, 'label': label}
+        lx, ly = self._phys_to_widget(x, y)
+        rx, ry = self._phys_to_widget(x + width, y + height)
+        self._preview_data = {'x': lx, 'y': ly, 'width': rx - lx, 'height': ry - ly, 'label': label}
         self._start_preview()
-    
+
     def show_scroll_position(self, x: int, y: int, clicks: int):
         self._preview_type = 'scroll'
+        x, y = self._phys_to_widget(x, y)
         self._preview_data = {'x': x, 'y': y, 'clicks': clicks}
         self._start_preview()
     

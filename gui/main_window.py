@@ -32,6 +32,7 @@ from .recorder_panel import RecorderPanel
 from .widgets import WindowSelector
 from .command_panel import CommandManagerWidget
 from .dashboard_page import DashboardPage
+from .tray_service import TrayService
 from .fluent_theme import (
     apply_app_theme, AutomatePanel, AutomateToolbar, status_bar_style,
     create_compact_int_spin, create_compact_float_spin, InlineNumericField,
@@ -81,6 +82,34 @@ class MainWindow(MSFluentWindow):
         
         self._update_checker = UpdateChecker(APP_VERSION)
         self._check_for_update()
+
+        self._allow_exit = False
+        self._setup_tray()
+
+    def _setup_tray(self):
+        from .app import get_icon_path
+        self._tray_service = TrayService(self)
+        ok = self._tray_service.setup(self, get_icon_path())
+        if not ok:
+            self._tray_service = None
+            return
+        self._tray_service.show_window_requested.connect(self._restore_from_tray)
+        self._tray_service.run_dashboard_requested.connect(self._run_all_from_tray)
+        self._tray_service.quit_requested.connect(self._exit_app)
+
+    def _restore_from_tray(self):
+        self.showNormal()
+        self.activateWindow()
+        self.raise_()
+
+    def _run_all_from_tray(self):
+        self.switchTo(self.dashboardInterface)
+        if hasattr(self.dashboardInterface, '_run_all'):
+            self.dashboardInterface._run_all()
+
+    def _exit_app(self):
+        self._allow_exit = True
+        self.close()
     
     def _setup_ui(self):
         apply_app_theme()
@@ -492,20 +521,39 @@ class MainWindow(MSFluentWindow):
         self._config.save()
     
     def closeEvent(self, event):
+        if not self._allow_exit and getattr(self, '_tray_service', None) and self._tray_service.is_visible:
+            if self._config.minimize_to_tray:
+                event.ignore()
+                self.hide()
+                self._tray_service.show_message(
+                    "SimpleRPA 仍在运行",
+                    "已最小化到系统托盘，定时任务将在后台继续。右键托盘图标可退出。"
+                )
+                return
+
         has_unsaved = any(self._tab_modified.values())
         if has_unsaved:
+            # 退出时若窗口处于隐藏状态（如从托盘退出），先显示并激活，
+            # 否则保存提示会挂在隐藏窗口上，用户看不到也点不到。
+            if self.isHidden() or not self.isVisible():
+                self.showNormal()
+                self.activateWindow()
+                self.raise_()
+
             box = MessageBox('保存更改', '有未保存的脚本，是否保存?', self)
             box.yesButton.setText('保存')
             box.cancelButton.setText('不保存')
-            
+
             if box.exec():
                 if not self._save_script():
                     event.ignore()
                     return
-        
+
         self._recorder_panel.stop_recording()
         for player in self._tab_players.values():
             player.stop_and_wait(timeout=1.0)
+        if getattr(self, '_tray_service', None):
+            self._tray_service.hide()
         self._save_settings()
         event.accept()
     

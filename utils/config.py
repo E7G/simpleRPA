@@ -29,7 +29,17 @@ class Config:
     timeout_seconds: float = 0
     
     last_dashboard_list: str = ''
-    
+
+    schedule_enabled: bool = False
+    schedule_mode: str = 'idle'
+    schedule_time: str = '09:00'
+    schedule_idle_seconds: int = 180
+    schedule_require_idle: bool = False
+    schedule_prompt_countdown: int = 15
+    schedule_last_run_date: str = ''
+
+    minimize_to_tray: bool = True
+
     _config_path: str = field(default='', repr=False)
     
     def __post_init__(self):
@@ -66,6 +76,14 @@ class Config:
                 'infinite_loop': self.infinite_loop,
                 'timeout_seconds': self.timeout_seconds,
                 'last_dashboard_list': self.last_dashboard_list,
+                'schedule_enabled': self.schedule_enabled,
+                'schedule_mode': self.schedule_mode,
+                'schedule_time': self.schedule_time,
+                'schedule_idle_seconds': self.schedule_idle_seconds,
+                'schedule_require_idle': self.schedule_require_idle,
+                'schedule_prompt_countdown': self.schedule_prompt_countdown,
+                'schedule_last_run_date': self.schedule_last_run_date,
+                'minimize_to_tray': self.minimize_to_tray,
             }
             
             with open(save_path, 'w', encoding='utf-8') as f:
@@ -107,7 +125,15 @@ class Config:
             self.infinite_loop = data.get('infinite_loop', False)
             self.timeout_seconds = data.get('timeout_seconds', 0)
             self.last_dashboard_list = data.get('last_dashboard_list', '')
-            
+            self.schedule_enabled = data.get('schedule_enabled', False)
+            self.schedule_mode = data.get('schedule_mode', 'idle')
+            self.schedule_time = data.get('schedule_time', '09:00')
+            self.schedule_idle_seconds = data.get('schedule_idle_seconds', 180)
+            self.schedule_require_idle = data.get('schedule_require_idle', False)
+            self.schedule_prompt_countdown = data.get('schedule_prompt_countdown', 15)
+            self.schedule_last_run_date = data.get('schedule_last_run_date', '')
+            self.minimize_to_tray = data.get('minimize_to_tray', True)
+
             return True
         except Exception as e:
             print(f"Load config failed: {e}")

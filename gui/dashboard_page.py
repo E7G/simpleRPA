@@ -2,8 +2,9 @@ import os
 import json
 from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QFileDialog, QLabel, QFrame,
+    QApplication,
 )
-from PyQt5.QtCore import Qt, pyqtSignal
+from PyQt5.QtCore import Qt, pyqtSignal, QTimer, QTime
 from PyQt5.QtGui import QColor
 from typing import Dict, Optional, List
 from dataclasses import dataclass
@@ -14,7 +15,7 @@ from qfluentwidgets import (
     CheckBox, SubtitleLabel, CaptionLabel, IconWidget, ScrollArea,
     TransparentToolButton, InfoBadge, TitleLabel, HeaderCardWidget,
     isDarkTheme, themeColor, SimpleCardWidget, InfoBar, InfoBarPosition,
-    ComboBox, LineEdit, MessageBox
+    ComboBox, LineEdit, MessageBox, SwitchButton, TimeEdit, SpinBox
 )
 
 from core.actions import Action, ActionType
@@ -507,6 +508,334 @@ class StatCard(CardWidget):
         self._value_label.setText(value)
 
 
+class _OverlayBase(QWidget):
+    """半透明遮罩 + 居中卡片的窗口内覆盖层，替代会发白的 fluent 弹窗。"""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setAttribute(Qt.WA_StyledBackground, True)
+        self.setObjectName("overlayMask")
+        self.setStyleSheet("#overlayMask { background-color: rgba(0, 0, 0, 0.45); }")
+        self.hide()
+
+        self._card = QFrame(self)
+        self._card.setObjectName("overlayCard")
+        card_bg = "#2b2b2b" if isDarkTheme() else "#ffffff"
+        self._card.setStyleSheet(
+            "#overlayCard { background-color: %s; border-radius: 10px;"
+            " border: 1px solid rgba(128,128,128,0.28); }" % card_bg
+        )
+        self._card.setMaximumWidth(460)
+        self.card_layout = QVBoxLayout(self._card)
+        self.card_layout.setContentsMargins(24, 24, 24, 20)
+        self.card_layout.setSpacing(14)
+
+    def resizeEvent(self, event):
+        if self.parentWidget():
+            self.setGeometry(self.parentWidget().rect())
+        self._center_card()
+        super().resizeEvent(event)
+
+    def _center_card(self):
+        hint = self._card.sizeHint()
+        w = min(max(hint.width(), 360), 460)
+        self._card.resize(w, hint.height())
+        x = (self.width() - self._card.width()) // 2
+        y = (self.height() - self._card.height()) // 2
+        self._card.move(max(0, x), max(0, y))
+
+    def show_overlay(self):
+        if self.parentWidget():
+            self.setGeometry(self.parentWidget().rect())
+        self.raise_()
+        self.show()
+        self._center_card()
+
+    def hide_overlay(self):
+        self.hide()
+
+# __OVERLAY_MORE__
+
+
+class ScheduleCountdownWindow(QWidget):
+    """执行前的倒计时提醒，独立顶层窗口。
+
+    不依赖主窗口可见（空闲触发时主窗口通常已最小化到托盘），
+    用不透明背景的普通 QWidget，避开 fluent 半透明遮罩弹窗发白的问题。
+    """
+
+    accepted = pyqtSignal()
+    rejected = pyqtSignal()
+
+    def __init__(self):
+        super().__init__(None)
+        self._remaining = 15
+        self._total = 15
+
+        self.setWindowTitle("SimpleRPA 定时执行")
+        self.setWindowFlags(
+            Qt.Window | Qt.WindowStaysOnTopHint | Qt.Tool
+            | Qt.WindowCloseButtonHint
+        )
+        self.setFixedWidth(400)
+        self.setAttribute(Qt.WA_StyledBackground, True)
+        self.setObjectName("countdownWindow")
+        bg = "#2b2b2b" if isDarkTheme() else "#ffffff"
+        border = "rgba(128,128,128,0.3)"
+        self.setStyleSheet(
+            "#countdownWindow { background-color: %s;"
+            " border: 1px solid %s; }" % (bg, border)
+        )
+
+        from .app import get_icon_path
+        icon_path = get_icon_path()
+        if icon_path:
+            from PyQt5.QtGui import QIcon
+            self.setWindowIcon(QIcon(icon_path))
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(24, 24, 24, 20)
+        layout.setSpacing(14)
+
+        self._title = SubtitleLabel("即将自动运行全部脚本")
+        layout.addWidget(self._title)
+
+        self._desc = BodyLabel("")
+        self._desc.setWordWrap(True)
+        layout.addWidget(self._desc)
+
+        self._bar = ProgressBar()
+        self._bar.setFixedHeight(6)
+        layout.addWidget(self._bar)
+
+        btn_row = QHBoxLayout()
+        btn_row.addStretch()
+        self._cancel_btn = PushButton(FluentIcon.CANCEL, "取消本次")
+        self._cancel_btn.clicked.connect(self._on_cancel)
+        btn_row.addWidget(self._cancel_btn)
+        self._run_now_btn = PrimaryPushButton(FluentIcon.PLAY, "立即运行")
+        self._run_now_btn.clicked.connect(self._on_accept)
+        btn_row.addWidget(self._run_now_btn)
+        layout.addLayout(btn_row)
+
+        self._timer = QTimer(self)
+        self._timer.timeout.connect(self._tick)
+
+    def start(self, seconds: int):
+        self._remaining = max(1, seconds)
+        self._total = self._remaining
+        self._bar.setRange(0, self._total)
+        self._update_text()
+        self._show_centered()
+        self._timer.start(1000)
+
+    def _show_centered(self):
+        self.adjustSize()
+        screen = QApplication.primaryScreen()
+        if screen:
+            geo = screen.availableGeometry()
+            x = geo.x() + (geo.width() - self.width()) // 2
+            y = geo.y() + (geo.height() - self.height()) // 2
+            self.move(max(geo.x(), x), max(geo.y(), y))
+        self.show()
+        self.raise_()
+        self.activateWindow()
+
+    def _update_text(self):
+        self._desc.setText(
+            f"将在 {self._remaining} 秒后开始执行。\n"
+            f"如果你正在使用电脑，请点击「取消本次」。"
+        )
+        self._bar.setValue(self._remaining)
+
+    def _tick(self):
+        self._remaining -= 1
+        if self._remaining <= 0:
+            self._on_accept()
+            return
+        self._update_text()
+
+    def _on_accept(self):
+        self._timer.stop()
+        self.hide()
+        self.accepted.emit()
+
+    def _on_cancel(self):
+        self._timer.stop()
+        self.hide()
+        self.rejected.emit()
+
+    def closeEvent(self, event):
+        # 点窗口关闭按钮等同于取消本次
+        if self._timer.isActive():
+            self._timer.stop()
+            self.rejected.emit()
+        super().closeEvent(event)
+
+
+class ScheduleSettingsOverlay(_OverlayBase):
+    """定时设置面板，窗口内覆盖层。两种模式二选一：空闲时执行 / 定时执行。"""
+
+    settings_changed = pyqtSignal()
+
+    def __init__(self, config, parent=None):
+        super().__init__(parent)
+        self._config = config
+        self._card.setMaximumWidth(440)
+
+        header = QHBoxLayout()
+        title = SubtitleLabel("定时设置")
+        header.addWidget(title)
+        header.addStretch()
+        self._enable_switch = SwitchButton()
+        self._enable_switch.setOnText("开")
+        self._enable_switch.setOffText("关")
+        header.addWidget(self._enable_switch)
+        self.card_layout.addLayout(header)
+
+        mode_row = QHBoxLayout()
+        mode_row.setSpacing(10)
+        mode_label = BodyLabel("模式")
+        mode_label.setFixedWidth(56)
+        mode_row.addWidget(mode_label)
+        self._mode_combo = ComboBox()
+        self._mode_combo.addItem("空闲时执行", userData="idle")
+        self._mode_combo.addItem("定时执行", userData="time")
+        self._mode_combo.currentIndexChanged.connect(self._on_mode_changed)
+        mode_row.addWidget(self._mode_combo, 1)
+        self.card_layout.addLayout(mode_row)
+
+        self._time_row = QHBoxLayout()
+        self._time_row.setSpacing(10)
+        time_label = BodyLabel("时间")
+        time_label.setFixedWidth(56)
+        self._time_row.addWidget(time_label)
+        self._time_edit = TimeEdit()
+        self._time_edit.setDisplayFormat("HH:mm")
+        self._time_row.addWidget(self._time_edit, 1)
+        self.card_layout.addLayout(self._time_row)
+
+        self._require_idle_cb = CheckBox("到点后还需系统空闲再执行")
+        self.card_layout.addWidget(self._require_idle_cb)
+
+        self._idle_row = QHBoxLayout()
+        self._idle_row.setSpacing(10)
+        idle_label = BodyLabel("空闲")
+        idle_label.setFixedWidth(56)
+        self._idle_row.addWidget(idle_label)
+        self._idle_spin = SpinBox()
+        self._idle_spin.setRange(10, 3600)
+        self._idle_spin.setSuffix(" 秒无操作")
+        self._idle_row.addWidget(self._idle_spin, 1)
+        self.card_layout.addLayout(self._idle_row)
+
+        countdown_row = QHBoxLayout()
+        countdown_row.setSpacing(10)
+        countdown_label = BodyLabel("提醒")
+        countdown_label.setFixedWidth(56)
+        countdown_row.addWidget(countdown_label)
+        self._countdown_spin = SpinBox()
+        self._countdown_spin.setRange(0, 120)
+        self._countdown_spin.setSuffix(" 秒倒计时")
+        countdown_row.addWidget(self._countdown_spin, 1)
+        self.card_layout.addLayout(countdown_row)
+
+        self._hint = CaptionLabel("")
+        self._hint.setWordWrap(True)
+        self._hint.setStyleSheet(muted_caption_style())
+        self.card_layout.addWidget(self._hint)
+
+        btn_row = QHBoxLayout()
+        btn_row.addStretch()
+        close_btn = PrimaryPushButton(FluentIcon.ACCEPT, "完成")
+        close_btn.clicked.connect(self._on_done)
+        btn_row.addWidget(close_btn)
+        self.card_layout.addLayout(btn_row)
+
+        self._require_idle_cb.stateChanged.connect(self._on_any_changed)
+        self._enable_switch.checkedChanged.connect(self._on_any_changed)
+        self._time_edit.timeChanged.connect(self._on_any_changed)
+        self._idle_spin.valueChanged.connect(self._on_any_changed)
+        self._countdown_spin.valueChanged.connect(self._on_any_changed)
+
+        self._loading = False
+
+    def load_from_config(self):
+        cfg = self._config
+        self._loading = True
+        idx = self._mode_combo.findData(cfg.schedule_mode)
+        self._mode_combo.setCurrentIndex(idx if idx >= 0 else 0)
+        try:
+            hh, mm = map(int, cfg.schedule_time.split(':'))
+            self._time_edit.setTime(QTime(hh, mm))
+        except (ValueError, AttributeError):
+            self._time_edit.setTime(QTime(9, 0))
+        self._require_idle_cb.setChecked(cfg.schedule_require_idle)
+        self._idle_spin.setValue(max(10, cfg.schedule_idle_seconds))
+        self._countdown_spin.setValue(max(0, cfg.schedule_prompt_countdown))
+        self._enable_switch.setChecked(cfg.schedule_enabled)
+        self._loading = False
+        self._update_rows()
+        self._update_hint()
+
+    def _on_mode_changed(self, _i):
+        self._update_rows()
+        self._on_any_changed()
+
+    def _update_rows(self):
+        is_time = (self._mode_combo.currentData() == 'time')
+        for i in range(self._time_row.count()):
+            w = self._time_row.itemAt(i).widget()
+            if w:
+                w.setVisible(is_time)
+        self._require_idle_cb.setVisible(is_time)
+        # 空闲秒数：idle 模式始终需要；time 模式仅在勾选"还需空闲"时需要
+        idle_needed = (not is_time) or self._require_idle_cb.isChecked()
+        for i in range(self._idle_row.count()):
+            w = self._idle_row.itemAt(i).widget()
+            if w:
+                w.setVisible(idle_needed)
+        self._center_card()
+
+    def _on_any_changed(self, *_):
+        if self._loading:
+            return
+        self._update_rows()
+        self._save()
+        self._update_hint()
+
+    def _save(self):
+        cfg = self._config
+        cfg.schedule_enabled = self._enable_switch.isChecked()
+        cfg.schedule_mode = self._mode_combo.currentData() or 'idle'
+        cfg.schedule_time = self._time_edit.time().toString("HH:mm")
+        cfg.schedule_require_idle = self._require_idle_cb.isChecked()
+        cfg.schedule_idle_seconds = self._idle_spin.value()
+        cfg.schedule_prompt_countdown = self._countdown_spin.value()
+        cfg.save()
+        self.settings_changed.emit()
+
+    def summary_text(self) -> str:
+        cfg = self._config
+        if not cfg.schedule_enabled:
+            return "定时执行：未启用"
+        if cfg.schedule_mode == 'time':
+            base = f"每天 {cfg.schedule_time} 执行"
+            if cfg.schedule_require_idle:
+                base += f"（需空闲 {cfg.schedule_idle_seconds} 秒）"
+        else:
+            base = f"空闲 {cfg.schedule_idle_seconds} 秒后执行"
+        base += "，每天一次"
+        return base
+
+    def _update_hint(self):
+        self._hint.setText(self.summary_text())
+
+    def _on_done(self):
+        self.hide_overlay()
+        self.settings_changed.emit()
+
+
 class DashboardPage(QWidget):
     _update_progress_signal = pyqtSignal(float, int, int)
     _update_state_signal = pyqtSignal(object, str)
@@ -535,12 +864,27 @@ class DashboardPage(QWidget):
         self._current_file: Optional[str] = None
         self._is_running = False
         self._current_script_index = -1
-        
+
         self._setup_ui()
         self._setup_connections()
-        
-        from PyQt5.QtCore import QTimer
-        QTimer.singleShot(100, self._load_last_list)
+
+        self._schedule_overlay = ScheduleSettingsOverlay(self._config, self)
+        self._schedule_overlay.settings_changed.connect(self._on_schedule_settings_changed)
+        self._schedule_overlay.load_from_config()
+
+        self._countdown_window = ScheduleCountdownWindow()
+        self._countdown_window.accepted.connect(self._on_countdown_accepted)
+        self._countdown_window.rejected.connect(self._on_countdown_rejected)
+
+        self._schedule_timer = QTimer(self)
+        self._schedule_timer.timeout.connect(self._check_schedule)
+        self._schedule_prompt_active = False
+        self._update_schedule_summary()
+        if self._config.schedule_enabled:
+            self._schedule_timer.start(20000)
+
+        from PyQt5.QtCore import QTimer as _QTimer
+        _QTimer.singleShot(100, self._load_last_list)
     
     def _setup_ui(self):
         layout = QVBoxLayout(self)
@@ -669,7 +1013,18 @@ class DashboardPage(QWidget):
         btn_row.addWidget(self._stop_btn, 1)
         
         control_layout.addLayout(btn_row)
-        
+
+        schedule_row = QHBoxLayout()
+        self._schedule_btn = PushButton(FluentIcon.DATE_TIME, "定时设置")
+        self._schedule_btn.setFixedHeight(32)
+        self._schedule_btn.clicked.connect(self._open_schedule_settings)
+        schedule_row.addWidget(self._schedule_btn)
+        schedule_row.addStretch()
+        self._schedule_summary_label = CaptionLabel("定时执行：未启用")
+        self._schedule_summary_label.setStyleSheet(muted_caption_style())
+        schedule_row.addWidget(self._schedule_summary_label)
+        control_layout.addLayout(schedule_row)
+
         control_card.viewLayout.addWidget(control_content)
         left_layout.addWidget(control_card)
         
@@ -773,7 +1128,22 @@ class DashboardPage(QWidget):
         self._reset_all_cards_signal.connect(self._on_reset_all_cards)
         self._set_card_running_signal.connect(self._on_set_card_running)
         self._stop_signal.connect(self._on_stop_gui)
-    
+
+    def _open_schedule_settings(self):
+        self._schedule_overlay.load_from_config()
+        self._schedule_overlay.show_overlay()
+
+    def _on_schedule_settings_changed(self):
+        if self._config.schedule_enabled:
+            if not self._schedule_timer.isActive():
+                self._schedule_timer.start(20000)
+        else:
+            self._schedule_timer.stop()
+        self._update_schedule_summary()
+
+    def _update_schedule_summary(self):
+        self._schedule_summary_label.setText(self._schedule_overlay.summary_text())
+
     def _refresh_windows(self):
         self._window_selector.refresh_windows()
     
@@ -1333,7 +1703,65 @@ class DashboardPage(QWidget):
     def _execute_script_with_finish(self, item: ScriptItem):
         self._execute_script(item)
         self._update_finished_signal.emit(True, "")
-    
+
+    def _check_schedule(self):
+        from datetime import datetime
+        cfg = self._config
+        if not cfg.schedule_enabled:
+            return
+        if self._is_running or self._schedule_prompt_active:
+            return
+
+        now = datetime.now()
+        today_key = now.strftime("%Y-%m-%d")
+        # 每天只执行一次
+        if cfg.schedule_last_run_date == today_key:
+            return
+
+        from utils.idle_monitor import get_idle_seconds
+
+        if cfg.schedule_mode == 'time':
+            # 定时执行：到点后触发（可选附加空闲条件）
+            target = cfg.schedule_time
+            if now.strftime("%H:%M") < target:
+                return
+            if cfg.schedule_require_idle:
+                if get_idle_seconds() < cfg.schedule_idle_seconds:
+                    return
+        else:
+            # 空闲执行：检测到足够空闲即触发，不限时间
+            if get_idle_seconds() < cfg.schedule_idle_seconds:
+                return
+
+        # 先占位标记今天已运行，避免倒计时期间或运行中重复触发
+        cfg.schedule_last_run_date = today_key
+        cfg.save()
+        self._trigger_scheduled_run()
+
+    def _trigger_scheduled_run(self):
+        enabled_scripts = [s for s in self._scripts if s.enabled]
+        if not enabled_scripts:
+            self._show_warning("定时触发：没有可运行的脚本")
+            return
+
+        countdown = self._config.schedule_prompt_countdown
+        if countdown > 0:
+            self._schedule_prompt_active = True
+            self._countdown_window.start(countdown)
+            return
+
+        self._show_info("定时触发：开始运行全部脚本")
+        self._run_all()
+
+    def _on_countdown_accepted(self):
+        self._schedule_prompt_active = False
+        self._show_info("定时触发：开始运行全部脚本")
+        self._run_all()
+
+    def _on_countdown_rejected(self):
+        self._schedule_prompt_active = False
+        self._show_info("定时执行已取消本次")
+
     def _run_all(self):
         enabled_scripts = [s for s in self._scripts if s.enabled]
         if not enabled_scripts:

@@ -7,22 +7,17 @@ def send_notification(title: str, message: str, app_name: str = "SimpleRPA"):
         return False
 
     try:
-        from PyQt5.QtWidgets import QSystemTrayIcon, QApplication
-        from PyQt5.QtCore import QTimer
+        from PyQt5.QtWidgets import QApplication, QSystemTrayIcon
 
         app = QApplication.instance()
         if app is not None:
-            tray = QSystemTrayIcon(app)
-            icon = app.windowIcon()
-            if icon.isNull():
-                style = QApplication.style()
-                if style:
-                    icon = style.standardIcon(style.SP_ComputerIcon)
-            tray.setIcon(icon)
-            tray.show()
-            tray.showMessage(title, message, QSystemTrayIcon.Information, 5000)
-            QTimer.singleShot(6000, tray.deleteLater)
-            return True
+            for widget in app.topLevelWidgets():
+                tray_service = getattr(widget, '_tray_service', None)
+                if tray_service and getattr(tray_service, 'is_visible', False):
+                    tray_service.show_message(
+                        title, message, QSystemTrayIcon.Information, 5000
+                    )
+                    return True
     except Exception:
         pass
 

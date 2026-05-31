@@ -1885,7 +1885,11 @@ class DashboardPage(QWidget):
         
         if selected_hwnd:
             self._window_utils.set_window_topmost(selected_hwnd)
-        
+            # 从托盘后台触发时，仅置顶不足以让窗口真正获得前台焦点，
+            # 强制激活并触发重绘，避免目标窗口首帧空白（白屏）。
+            self._window_utils.force_foreground_window(selected_hwnd)
+            time.sleep(0.3)
+
         self._player.play()
         
         topmost_check_counter = 0

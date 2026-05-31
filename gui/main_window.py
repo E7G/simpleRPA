@@ -61,6 +61,11 @@ class MainWindow(MSFluentWindow):
         self._tab_players: Dict[str, Player] = {}
         self._tab_files: Dict[str, Optional[str]] = {}
         self._tab_modified: Dict[str, bool] = {}
+
+        # 单步调试运行状态：用于让结束回调区分“调试单个动作”与“整段运行”，
+        # 从而恢复正确的 UI/状态文案，并避免误触发整段运行的完成通知。
+        self._single_debug_active = False
+        self._single_debug_index = -1
         
         self._setup_ui()
         self._setup_navigation()
@@ -533,9 +538,9 @@ class MainWindow(MSFluentWindow):
 
         has_unsaved = any(self._tab_modified.values())
         if has_unsaved:
-            # 退出时若窗口处于隐藏状态（如从托盘退出），先显示并激活，
-            # 否则保存提示会挂在隐藏窗口上，用户看不到也点不到。
-            if self.isHidden() or not self.isVisible():
+            # 退出时若窗口处于隐藏或最小化状态（如从托盘退出、或最小化后退出），
+            # 先恢复显示并激活，否则保存提示会挂在不可见窗口上，用户看不到也点不到。
+            if self.isHidden() or not self.isVisible() or self.isMinimized():
                 self.showNormal()
                 self.activateWindow()
                 self.raise_()
@@ -1030,19 +1035,45 @@ class MainWindow(MSFluentWindow):
                 return
         
         window_offset = self._window_selector.get_window_offset()
-        
+        window_title = self._window_selector.get_selected_title()
+
+        # 单步调试必须像整段运行一样重新绑定当前选中的窗口，
+        # 否则 player 会沿用上一次运行时缓存的旧 hwnd（_window_offset_provider），
+        # 导致换了新窗口后仍校验旧窗口、报“旧窗口不存在”。
+        target_action = actions[index]
+        if target_action.action_type in [ActionType.MOUSE_CLICK_RELATIVE, ActionType.MOUSE_MOVE_RELATIVE]:
+            target_action.use_relative_coords = True
+        if window_title:
+            if target_action.background_mode:
+                target_action.window_title = window_title
+            if target_action.action_type in [ActionType.ACTION_GROUP_REF, ActionType.IMAGE_CLICK, ActionType.IMAGE_WAIT_CLICK, ActionType.IMAGE_CHECK]:
+                target_action.window_title = window_title
+
         if selected_hwnd:
             self._window_utils.activate_window(selected_hwnd)
-        
+
+        # 进入单步调试运行状态：让右上角按钮可暂停/停止；
+        # 结束后由 _on_player_finished 依据该标志恢复原来的 UI。
+        self._single_debug_active = True
+        self._single_debug_index = index
+        self._run_btn.setEnabled(False)
+        self._pause_btn.setEnabled(True)
+        self._pause_btn.setText("暂停")
+        self._stop_btn.setEnabled(True)
+        self._progress_bar.setVisible(True)
+        self._progress_bar.setValue(0)
+
         def execute():
             try:
                 player.actions = actions
                 player.set_window_offset(window_offset)
+                player.set_window_hwnd(selected_hwnd or 0, self._window_utils)
+                player.set_window_title(window_title)
                 player.speed = self._speed_spin.value()
                 player.execute_single_action(index, window_offset)
             except Exception as e:
                 print(f"[单步调试错误] {e}")
-        
+
         import threading
         thread = threading.Thread(target=execute, daemon=True)
         thread.start()
@@ -1136,11 +1167,21 @@ class MainWindow(MSFluentWindow):
     
     def _on_player_finished(self, success: bool, route_key: str):
         current_route_key = self._script_editor.get_current_route_key()
-        
+
         if route_key == current_route_key:
             self._progress_bar.setVisible(False)
             player = self._get_current_player()
-            if success:
+
+            # 单步调试结束：用单步专属文案恢复界面，不发整段运行的完成通知。
+            if self._single_debug_active:
+                idx = self._single_debug_index
+                if success:
+                    self._status_label.setText(f"调试完成: 第 {idx + 1} 个动作")
+                else:
+                    self._status_label.setText(f"调试已停止: 第 {idx + 1} 个动作")
+                self._single_debug_active = False
+                self._single_debug_index = -1
+            elif success:
                 if player:
                     total_actions = len(player.actions)
                     total_repeats = player.current_repeat
@@ -1156,7 +1197,7 @@ class MainWindow(MSFluentWindow):
                     self._status_label.setText(f"执行中断 | 已完成 {player.current_index} 个动作")
                 else:
                     self._status_label.setText("执行中断")
-            
+
             self._run_btn.setEnabled(True)
             self._pause_btn.setEnabled(False)
             self._stop_btn.setEnabled(False)

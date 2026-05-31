@@ -558,41 +558,62 @@ class Player:
     def execute_single_action(self, index: int, window_offset: Optional[Tuple[int, int]] = None) -> bool:
         if index < 0 or index >= len(self.actions):
             return False
-        
+
         action = self.actions[index]
-        
-        is_valid, window_error = self._validate_window_before_action(action)
-        if not is_valid:
-            self._emit('on_window_error', action, index, window_error)
-            return False
-        
-        current_offset, offset_error = self._get_realtime_window_offset()
-        if offset_error:
-            self._emit('on_window_error', action, index, offset_error)
-            return False
-        
-        if current_offset is None:
-            current_offset = window_offset or self._window_offset
-        
-        self._activate_window_before_action(action)
-        
-        adjusted_delay_before = action.delay_before / self.speed if self.speed > 0 else action.delay_before
-        adjusted_delay_after = action.delay_after / self.speed if self.speed > 0 else action.delay_after
-        
-        if adjusted_delay_before > 0:
-            time.sleep(adjusted_delay_before)
-        
-        self._emit('on_action_start', action, index)
-        
+
+        # 单步调试作为一次独立的“迷你运行”：进入 PLAYING 状态、复位停止标志与暂停事件，
+        # 让右上角的暂停/停止按钮可用；结束时回到 IDLE 并 emit on_finished，
+        # 由 GUI 的状态回调自动把界面恢复为原来的样子。
+        self._stop_flag = False
+        self._pause_event.set()
+        self.current_index = index
+        self.current_repeat = 0
+        self.state = PlayerState.PLAYING
+        self._emit('on_state_changed', self.state)
+
+        success = False
         try:
-            success = action.execute(window_offset=current_offset, should_stop=lambda: self._stop_flag, local_group_manager=self._local_group_manager)
-            self._emit('on_action_end', action, index, success)
-            
-            if adjusted_delay_after > 0:
-                time.sleep(adjusted_delay_after)
-            
+            is_valid, window_error = self._validate_window_before_action(action)
+            if not is_valid:
+                self._emit('on_window_error', action, index, window_error)
+                return False
+
+            current_offset, offset_error = self._get_realtime_window_offset()
+            if offset_error:
+                self._emit('on_window_error', action, index, offset_error)
+                return False
+
+            if current_offset is None:
+                current_offset = window_offset or self._window_offset
+
+            self._activate_window_before_action(action)
+
+            adjusted_delay_before = action.delay_before / self.speed if self.speed > 0 else action.delay_before
+            adjusted_delay_after = action.delay_after / self.speed if self.speed > 0 else action.delay_after
+
+            if adjusted_delay_before > 0:
+                self._interruptible_sleep(adjusted_delay_before)
+
+            self._pause_event.wait()
+            if self._stop_flag:
+                return False
+
+            self._emit('on_action_start', action, index)
+
+            try:
+                success = action.execute(window_offset=current_offset, should_stop=lambda: self._stop_flag, local_group_manager=self._local_group_manager)
+                self._emit('on_action_end', action, index, success)
+
+                if adjusted_delay_after > 0:
+                    self._interruptible_sleep(adjusted_delay_after)
+            except Exception as e:
+                self._emit('on_error', action, index, str(e))
+                self._emit('on_action_end', action, index, False)
+                success = False
+
             return success
-        except Exception as e:
-            self._emit('on_error', action, index, str(e))
-            self._emit('on_action_end', action, index, False)
-            raise
+        finally:
+            finished_ok = bool(success) and not self._stop_flag
+            self.state = PlayerState.IDLE
+            self._emit('on_state_changed', self.state)
+            self._emit('on_finished', finished_ok)

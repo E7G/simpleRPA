@@ -135,16 +135,81 @@ class WindowUtils:
     def activate_window(self, hwnd: int) -> bool:
         if not self._win32_available:
             return False
-        
+
         import win32gui
         import win32con
-        
+
         try:
             win32gui.ShowWindow(hwnd, win32con.SW_RESTORE)
             win32gui.SetForegroundWindow(hwnd)
             return True
         except Exception:
             return False
+
+    def force_foreground_window(self, hwnd: int) -> bool:
+        """强制把窗口带到前台并激活。
+
+        Windows 限制：当调用进程不是前台进程时（例如本程序在托盘后台触发），
+        SetForegroundWindow 会被静默拒绝，窗口虽置顶却拿不到真正的前台焦点，
+        导致目标窗口首帧不绘制而出现白屏。这里用 AttachThreadInput 把本线程
+        临时挂到当前前台线程上，绕过该限制，并辅以 ShowWindow 触发重绘。
+        """
+        if not self._win32_available:
+            return False
+
+        import win32gui
+        import win32con
+        import win32process
+
+        try:
+            if not win32gui.IsWindow(hwnd):
+                return False
+
+            if win32gui.IsIconic(hwnd):
+                win32gui.ShowWindow(hwnd, win32con.SW_RESTORE)
+            else:
+                win32gui.ShowWindow(hwnd, win32con.SW_SHOW)
+
+            fg_hwnd = win32gui.GetForegroundWindow()
+            if fg_hwnd == hwnd:
+                return True
+
+            cur_thread = win32process.GetCurrentThreadId()
+            fg_thread = 0
+            target_thread = 0
+            try:
+                if fg_hwnd:
+                    fg_thread, _ = win32process.GetWindowThreadProcessId(fg_hwnd)
+                target_thread, _ = win32process.GetWindowThreadProcessId(hwnd)
+            except Exception:
+                fg_thread = target_thread = 0
+
+            attached_fg = attached_target = False
+            try:
+                if fg_thread and fg_thread != cur_thread:
+                    attached_fg = bool(user32.AttachThreadInput(cur_thread, fg_thread, True))
+                if target_thread and target_thread != cur_thread and target_thread != fg_thread:
+                    attached_target = bool(user32.AttachThreadInput(cur_thread, target_thread, True))
+
+                win32gui.BringWindowToTop(hwnd)
+                win32gui.SetForegroundWindow(hwnd)
+                win32gui.SetActiveWindow(hwnd)
+            finally:
+                if attached_fg:
+                    user32.AttachThreadInput(cur_thread, fg_thread, False)
+                if attached_target:
+                    user32.AttachThreadInput(cur_thread, target_thread, False)
+
+            # 触发一次重绘，避免后台窗口首帧空白
+            try:
+                win32gui.UpdateWindow(hwnd)
+            except Exception:
+                pass
+
+            return True
+        except Exception:
+            return False
+
     
     def get_window_at_point(self, x: int, y: int) -> Optional[WindowInfo]:
         if not self._win32_available:

@@ -37,7 +37,12 @@ class WindowOffsetProvider:
             if not window_info:
                 return None, f"窗口不存在或已关闭 (句柄: {self._hwnd})"
             
-            self._last_offset = (window_info.x, window_info.y)
+            # 录制/选窗时使用的是客户区左上角，因此运行时也必须保持同一坐标基准。
+            client_origin = None
+            if hasattr(self._window_utils, 'client_to_screen_coords'):
+                client_origin = self._window_utils.client_to_screen_coords(self._hwnd, 0, 0)
+            
+            self._last_offset = client_origin or (window_info.x, window_info.y)
             self._last_error = None
             return self._last_offset, None
         except Exception as e:

@@ -144,6 +144,57 @@ class Action:
                 time.sleep(0.1)
         except Exception as e:
             print(f"[激活窗口失败] {e}")
+
+    def _get_window_client_region(self) -> Optional[Tuple[int, int, int, int]]:
+        if not self.window_title:
+            return None
+        
+        try:
+            from utils.window_utils import WindowUtils
+            
+            window_utils = WindowUtils()
+            window = window_utils.get_window_by_title(self.window_title)
+            if not window:
+                return None
+            
+            client_rect = window_utils.get_client_rect_screen(window.hwnd)
+            if not client_rect:
+                return None
+            
+            left, top, right, bottom = client_rect
+            width = max(0, right - left)
+            height = max(0, bottom - top)
+            if width <= 0 or height <= 0:
+                return None
+            
+            return (left, top, width, height)
+        except Exception as e:
+            print(f"[获取窗口客户区失败] {e}")
+            return None
+
+    def _screen_to_window_client_coords(self, screen_x: int, screen_y: int) -> Optional[Tuple[int, int]]:
+        if not self.window_title:
+            return None
+        
+        try:
+            from utils.window_utils import WindowUtils
+            
+            window_utils = WindowUtils()
+            window = window_utils.get_window_by_title(self.window_title)
+            if not window:
+                return None
+            
+            return window_utils.screen_to_client_coords(window.hwnd, screen_x, screen_y)
+        except Exception as e:
+            print(f"[屏幕坐标转客户区坐标失败] {e}")
+            return None
+
+    def _locate_image_on_screen(self, pyautogui, image_path: str, confidence: float):
+        locate_kwargs = {'confidence': confidence}
+        region = self._get_window_client_region()
+        if region:
+            locate_kwargs['region'] = region
+        return pyautogui.locateOnScreen(image_path, **locate_kwargs)
     
     def _execute_once(self, window_offset: Optional[Tuple[int, int]] = None, should_stop: Optional[Callable[[], bool]] = None, local_group_manager=None) -> bool:
         import pyautogui
@@ -279,7 +330,7 @@ class Action:
                 location = None
                 for attempt in range(3):
                     try:
-                        location = pyautogui.locateOnScreen(image_path, confidence=confidence)
+                        location = self._locate_image_on_screen(pyautogui, image_path, confidence)
                         if location:
                             break
                     except pyautogui.ImageNotFoundException:
@@ -292,9 +343,13 @@ class Action:
                         from utils.background_click import create_background_clicker
                         clicker = create_background_clicker(window_title=self.window_title)
                         if clicker:
-                            rect = clicker.rect
-                            rel_x = center.x - rect[0]
-                            rel_y = center.y - rect[1]
+                            client_coords = self._screen_to_window_client_coords(center.x, center.y)
+                            if client_coords:
+                                rel_x, rel_y = client_coords
+                            else:
+                                rect = clicker.rect
+                                rel_x = center.x - rect[0]
+                                rel_y = center.y - rect[1]
                             result = clicker.click(rel_x, rel_y, background=True)
                             if not result.success:
                                 pyautogui.click(center.x, center.y)
@@ -323,7 +378,7 @@ class Action:
                     if should_stop and should_stop():
                         return False
                     try:
-                        location = pyautogui.locateOnScreen(image_path, confidence=confidence)
+                        location = self._locate_image_on_screen(pyautogui, image_path, confidence)
                         if location:
                             break
                     except pyautogui.ImageNotFoundException:
@@ -338,9 +393,13 @@ class Action:
                         from utils.background_click import create_background_clicker
                         clicker = create_background_clicker(window_title=self.window_title)
                         if clicker:
-                            rect = clicker.rect
-                            rel_x = center.x - rect[0]
-                            rel_y = center.y - rect[1]
+                            client_coords = self._screen_to_window_client_coords(center.x, center.y)
+                            if client_coords:
+                                rel_x, rel_y = client_coords
+                            else:
+                                rect = clicker.rect
+                                rel_x = center.x - rect[0]
+                                rel_y = center.y - rect[1]
                             result = clicker.click(rel_x, rel_y, background=True)
                             if not result.success:
                                 pyautogui.click(center.x, center.y)
@@ -373,7 +432,7 @@ class Action:
                 location = None
                 for attempt in range(3):
                     try:
-                        location = pyautogui.locateOnScreen(image_path, confidence=confidence)
+                        location = self._locate_image_on_screen(pyautogui, image_path, confidence)
                         if location:
                             break
                     except pyautogui.ImageNotFoundException:

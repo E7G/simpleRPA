@@ -421,6 +421,74 @@ class TestPlayer(unittest.TestCase):
         self.assertEqual(len(player.actions), 1)
 
 
+class TestWindowOffsetProvider(unittest.TestCase):
+    def test_get_current_offset_prefers_client_origin(self):
+        from core.player import WindowOffsetProvider
+
+        class StubWindowUtils:
+            def get_window_by_hwnd(self, hwnd):
+                return type('WindowInfo', (), {'x': 10, 'y': 20})()
+
+            def client_to_screen_coords(self, hwnd, x, y):
+                return (30, 40)
+
+        provider = WindowOffsetProvider(hwnd=123, window_utils=StubWindowUtils())
+        offset, error = provider.get_current_offset()
+
+        self.assertEqual(offset, (30, 40))
+        self.assertIsNone(error)
+
+    def test_get_current_offset_falls_back_to_window_origin(self):
+        from core.player import WindowOffsetProvider
+
+        class StubWindowUtils:
+            def get_window_by_hwnd(self, hwnd):
+                return type('WindowInfo', (), {'x': 10, 'y': 20})()
+
+            def client_to_screen_coords(self, hwnd, x, y):
+                return None
+
+        provider = WindowOffsetProvider(hwnd=123, window_utils=StubWindowUtils())
+        offset, error = provider.get_current_offset()
+
+        self.assertEqual(offset, (10, 20))
+        self.assertIsNone(error)
+
+
+class TestActionImageLookup(unittest.TestCase):
+    def test_get_window_client_region(self):
+        from core.actions import Action, ActionType
+
+        action = Action(action_type=ActionType.IMAGE_CHECK, params={'image_path': 'dummy.png'})
+        action.window_title = '测试窗口'
+
+        with patch('utils.window_utils.WindowUtils') as MockWindowUtils:
+            window_utils = MockWindowUtils.return_value
+            window_utils.get_window_by_title.return_value = type('WindowInfo', (), {'hwnd': 123})()
+            window_utils.get_client_rect_screen.return_value = (100, 200, 500, 700)
+
+            region = action._get_window_client_region()
+
+        self.assertEqual(region, (100, 200, 400, 500))
+
+    def test_locate_image_uses_window_region_when_available(self):
+        from core.actions import Action, ActionType
+
+        action = Action(action_type=ActionType.IMAGE_CHECK, params={'image_path': 'dummy.png'})
+        action.window_title = '测试窗口'
+
+        mock_pyautogui = MagicMock()
+        action._get_window_client_region = MagicMock(return_value=(1, 2, 3, 4))
+
+        action._locate_image_on_screen(mock_pyautogui, 'dummy.png', 0.9)
+
+        mock_pyautogui.locateOnScreen.assert_called_once_with(
+            'dummy.png',
+            confidence=0.9,
+            region=(1, 2, 3, 4)
+        )
+
+
 class TestExporter(unittest.TestCase):
     def setUp(self):
         from core.exporter import Exporter

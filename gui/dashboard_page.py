@@ -18,7 +18,7 @@ from qfluentwidgets import (
     ComboBox, LineEdit, MessageBox, SwitchButton, TimeEdit, SpinBox
 )
 
-from core.actions import Action, ActionType
+from core.actions import Action, ActionType, can_actions_run_offscreen
 from core.action_group import LocalActionGroupManager
 from core.player import Player, PlayerState
 from core.exporter import Exporter
@@ -867,6 +867,10 @@ class DashboardPage(QWidget):
 
         self._setup_ui()
         self._setup_connections()
+        if hasattr(self, '_offscreen_cb'):
+            self._offscreen_cb.setChecked(self._config.run_window_offscreen)
+        if hasattr(self, '_hide_taskbar_cb'):
+            self._hide_taskbar_cb.setChecked(self._config.run_window_hide_taskbar)
 
         self._schedule_overlay = ScheduleSettingsOverlay(self._config, self)
         self._schedule_overlay.settings_changed.connect(self._on_schedule_settings_changed)
@@ -992,9 +996,30 @@ class DashboardPage(QWidget):
         settings_row.addWidget(InlineNumericField("重复", self._repeat_spin))
         
         settings_row.addStretch()
-        
+
+        mode_box = QVBoxLayout()
+        mode_box.setSpacing(6)
+
+        mode_row_top = QHBoxLayout()
+        mode_row_top.setSpacing(12)
         self._infinite_cb = CheckBox("无限循环")
-        settings_row.addWidget(self._infinite_cb)
+        mode_row_top.addWidget(self._infinite_cb)
+
+        self._offscreen_cb = CheckBox("离屏后台")
+        self._offscreen_cb.setToolTip("把目标窗口移到屏幕外运行，结束后自动恢复")
+        mode_row_top.addWidget(self._offscreen_cb)
+        mode_row_top.addStretch()
+        mode_box.addLayout(mode_row_top)
+
+        mode_row_bottom = QHBoxLayout()
+        mode_row_bottom.setSpacing(12)
+        self._hide_taskbar_cb = CheckBox("隐藏任务栏图标")
+        self._hide_taskbar_cb.setToolTip("运行时隐藏目标窗口在任务栏上的图标，结束后自动恢复")
+        mode_row_bottom.addWidget(self._hide_taskbar_cb)
+        mode_row_bottom.addStretch()
+        mode_box.addLayout(mode_row_bottom)
+
+        settings_row.addLayout(mode_box)
         
         control_layout.addLayout(settings_row)
         
@@ -1134,6 +1159,10 @@ class DashboardPage(QWidget):
         self._schedule_overlay.show_overlay()
 
     def _on_schedule_settings_changed(self):
+        self._config.run_window_offscreen = self._offscreen_cb.isChecked()
+        if hasattr(self, '_hide_taskbar_cb'):
+            self._config.run_window_hide_taskbar = self._hide_taskbar_cb.isChecked()
+        self._config.save()
         if self._config.schedule_enabled:
             if not self._schedule_timer.isActive():
                 self._schedule_timer.start(20000)
@@ -1314,6 +1343,10 @@ class DashboardPage(QWidget):
                 self._repeat_spin.setValue(data['repeat'])
             if 'infinite' in data:
                 self._infinite_cb.setChecked(data['infinite'])
+            if 'offscreen' in data:
+                self._offscreen_cb.setChecked(data['offscreen'])
+            if 'hide_taskbar' in data and hasattr(self, '_hide_taskbar_cb'):
+                self._hide_taskbar_cb.setChecked(data['hide_taskbar'])
             
             if 'launch_command_id' in data:
                 self._set_selected_launch_command(data['launch_command_id'])
@@ -1376,6 +1409,8 @@ class DashboardPage(QWidget):
                 'speed': self._speed_spin.value(),
                 'repeat': self._repeat_spin.value(),
                 'infinite': self._infinite_cb.isChecked(),
+                'offscreen': self._offscreen_cb.isChecked(),
+                'hide_taskbar': self._hide_taskbar_cb.isChecked() if hasattr(self, '_hide_taskbar_cb') else False,
                 'launch_command_id': launch_cmd_id,
                 'launch_command': launch_command
             }
@@ -1876,6 +1911,22 @@ class DashboardPage(QWidget):
         
         if window_title:
             self._player.set_window_title(window_title)
+
+        offscreen_requested = bool(selected_hwnd and self._offscreen_cb.isChecked())
+        hide_taskbar_requested = bool(selected_hwnd and hasattr(self, '_hide_taskbar_cb') and self._hide_taskbar_cb.isChecked())
+        offscreen_supported = can_actions_run_offscreen(actions, local_group_manager=local_group_manager) if offscreen_requested else False
+        offscreen_enabled = offscreen_requested
+        if offscreen_enabled and hide_taskbar_requested:
+            run_mode = "offscreen_hidden_taskbar"
+        elif offscreen_enabled:
+            run_mode = "offscreen"
+        elif hide_taskbar_requested:
+            run_mode = "hidden_taskbar"
+        else:
+            run_mode = "normal"
+        self._player.set_window_run_mode(run_mode)
+        if offscreen_requested and not offscreen_supported:
+            self._show_warning_signal.emit("已强制启用离屏后台；当前脚本含可能依赖前台的动作，若失败请把相关动作改成后台模式。")
         
         total_actions = len(actions)
         if self._player.infinite_loop:
@@ -1883,7 +1934,7 @@ class DashboardPage(QWidget):
         else:
             self._status_label.setText(f"开始执行 {total_actions} 个动作，共 {item.repeat_count} 轮...")
         
-        if selected_hwnd:
+        if selected_hwnd and not offscreen_enabled:
             self._window_utils.set_window_topmost(selected_hwnd)
             # 从托盘后台触发时，仅置顶不足以让窗口真正获得前台焦点，
             # 强制激活并触发重绘，避免目标窗口首帧空白（白屏）。
@@ -1899,13 +1950,13 @@ class DashboardPage(QWidget):
                 break
             time.sleep(0.1)
             
-            if selected_hwnd:
+            if selected_hwnd and not offscreen_enabled:
                 topmost_check_counter += 1
                 if topmost_check_counter >= 10:
                     self._window_utils.set_window_topmost(selected_hwnd)
                     topmost_check_counter = 0
         
-        if selected_hwnd:
+        if selected_hwnd and not offscreen_enabled:
             self._window_utils.remove_window_topmost(selected_hwnd)
     
     def _execute_all(self):
@@ -2032,6 +2083,8 @@ class DashboardPage(QWidget):
         self._run_btn.setEnabled(True)
         self._stop_btn.setEnabled(False)
         self._progress_bar.setVisible(False)
+        if self._player and hasattr(self._player, '_restore_window_after_run'):
+            self._player._restore_window_after_run()
         
         if success:
             if self._player:

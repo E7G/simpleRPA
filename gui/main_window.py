@@ -17,7 +17,7 @@ from qfluentwidgets import (
     TransparentToolButton, CheckBox,
 )
 
-from core.actions import Action, ActionManager, ActionType
+from core.actions import Action, ActionManager, ActionType, can_actions_run_offscreen
 from core.player import Player, PlayerState
 from core.exporter import Exporter
 from core.action_group import LocalActionGroupManager
@@ -178,6 +178,13 @@ class MainWindow(MSFluentWindow):
         self._timeout_spin.setSpecialValueText("∞")
         tb.addWidget(InlineNumericField("超时", self._timeout_spin))
         
+        self._offscreen_cb = CheckBox("离屏后台")
+        self._offscreen_cb.setToolTip("把目标窗口移到屏幕外运行，结束后自动恢复")
+        tb.addWidget(self._offscreen_cb)
+        self._hide_taskbar_cb = CheckBox("隐藏任务栏图标")
+        self._hide_taskbar_cb.setToolTip("运行时隐藏目标窗口在任务栏上的图标，结束后自动恢复")
+        tb.addWidget(self._hide_taskbar_cb)
+
         tb.addStretch()
         
         self._run_btn = PrimaryPushButton(FluentIcon.PLAY, "运行")
@@ -454,6 +461,8 @@ class MainWindow(MSFluentWindow):
         
         self._infinite_cb.setChecked(self._config.infinite_loop)
         self._timeout_spin.setValue(self._config.timeout_seconds)
+        self._offscreen_cb.setChecked(self._config.run_window_offscreen)
+        self._hide_taskbar_cb.setChecked(self._config.run_window_hide_taskbar)
         
         if self._config.open_tabs:
             self._restore_open_tabs()
@@ -504,6 +513,8 @@ class MainWindow(MSFluentWindow):
         
         self._config.infinite_loop = self._infinite_cb.isChecked()
         self._config.timeout_seconds = self._timeout_spin.value()
+        self._config.run_window_offscreen = self._offscreen_cb.isChecked()
+        self._config.run_window_hide_taskbar = self._hide_taskbar_cb.isChecked()
         
         all_tabs = self._script_editor.get_all_tabs()
         all_local_groups = self._script_editor.get_all_local_groups()
@@ -864,8 +875,24 @@ class MainWindow(MSFluentWindow):
         
         window_title = self._window_selector.get_selected_title()
         player.set_window_title(window_title)
-        
-        if selected_hwnd:
+
+        offscreen_requested = bool(selected_hwnd and self._offscreen_cb.isChecked())
+        hide_taskbar_requested = bool(selected_hwnd and self._hide_taskbar_cb.isChecked())
+        offscreen_supported = can_actions_run_offscreen(actions, local_group_manager=player.get_local_group_manager()) if offscreen_requested else False
+        offscreen_enabled = offscreen_requested
+        if offscreen_enabled and hide_taskbar_requested:
+            run_mode = "offscreen_hidden_taskbar"
+        elif offscreen_enabled:
+            run_mode = "offscreen"
+        elif hide_taskbar_requested:
+            run_mode = "hidden_taskbar"
+        else:
+            run_mode = "normal"
+        player.set_window_run_mode(run_mode)
+        if offscreen_requested and not offscreen_supported:
+            self._status_label.setText("已强制启用离屏后台；当前脚本可能含前台动作，若失败请改成后台模式。")
+
+        if selected_hwnd and not offscreen_enabled:
             self._window_utils.activate_window(selected_hwnd)
         
         for action in actions:
@@ -1049,7 +1076,23 @@ class MainWindow(MSFluentWindow):
             if target_action.action_type in [ActionType.ACTION_GROUP_REF, ActionType.IMAGE_CLICK, ActionType.IMAGE_WAIT_CLICK, ActionType.IMAGE_CHECK]:
                 target_action.window_title = window_title
 
-        if selected_hwnd:
+        offscreen_requested = bool(selected_hwnd and self._offscreen_cb.isChecked())
+        hide_taskbar_requested = bool(selected_hwnd and self._hide_taskbar_cb.isChecked())
+        offscreen_supported = can_actions_run_offscreen([target_action], local_group_manager=player.get_local_group_manager()) if offscreen_requested else False
+        offscreen_enabled = offscreen_requested
+        if offscreen_enabled and hide_taskbar_requested:
+            run_mode = "offscreen_hidden_taskbar"
+        elif offscreen_enabled:
+            run_mode = "offscreen"
+        elif hide_taskbar_requested:
+            run_mode = "hidden_taskbar"
+        else:
+            run_mode = "normal"
+        player.set_window_run_mode(run_mode)
+        if offscreen_requested and not offscreen_supported:
+            self._status_label.setText("已强制启用离屏后台；当前动作可能仍依赖前台。")
+
+        if selected_hwnd and not offscreen_enabled:
             self._window_utils.activate_window(selected_hwnd)
 
         # 进入单步调试运行状态：让右上角按钮可暂停/停止；
@@ -1171,6 +1214,8 @@ class MainWindow(MSFluentWindow):
         if route_key == current_route_key:
             self._progress_bar.setVisible(False)
             player = self._get_current_player()
+            if player and hasattr(player, '_restore_window_after_run'):
+                player._restore_window_after_run()
 
             # 单步调试结束：用单步专属文案恢复界面，不发整段运行的完成通知。
             if self._single_debug_active:

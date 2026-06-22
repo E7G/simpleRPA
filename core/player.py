@@ -89,6 +89,9 @@ class Player:
         self._window_offset_provider: Optional[WindowOffsetProvider] = None
         self._window_hwnd: int = 0
         self._window_utils = None
+        self._window_run_mode: str = "normal"
+        self._window_restore_state = None
+        self._window_taskbar_restore_state = None
         
         self._callbacks = {
             'on_action_start': [],
@@ -172,6 +175,68 @@ class Player:
                 self._window_offset_provider.set_window_utils(window_utils)
         else:
             self._window_offset_provider = None
+
+    def set_window_run_mode(self, mode: str):
+        allowed_modes = ("normal", "offscreen", "hidden_taskbar", "offscreen_hidden_taskbar")
+        self._window_run_mode = mode if mode in allowed_modes else "normal"
+
+    def _prepare_window_for_run(self) -> Tuple[bool, str]:
+        if self._window_run_mode == "normal":
+            return True, ""
+
+        if self._window_run_mode == "hidden_taskbar":
+            if not self._window_hwnd or not self._window_utils:
+                return False, "后台窗口运行失败: 未绑定目标窗口"
+            taskbar_state = self._window_utils.set_window_taskbar_visibility(self._window_hwnd, visible=False)
+            if not taskbar_state:
+                return False, "后台窗口运行失败: 无法隐藏任务栏图标"
+            self._window_taskbar_restore_state = taskbar_state
+            return True, ""
+
+        if self._window_run_mode == "offscreen_hidden_taskbar":
+            if not self._window_hwnd or not self._window_utils:
+                return False, "后台窗口运行失败: 未绑定目标窗口"
+            taskbar_state = self._window_utils.set_window_taskbar_visibility(self._window_hwnd, visible=False)
+            if not taskbar_state:
+                return False, "后台窗口运行失败: 无法隐藏任务栏图标"
+            self._window_taskbar_restore_state = taskbar_state
+            placement = self._window_utils.move_window_offscreen(self._window_hwnd)
+            if not placement:
+                self._window_utils.restore_window_taskbar_visibility(
+                    self._window_hwnd,
+                    self._window_taskbar_restore_state,
+                )
+                self._window_taskbar_restore_state = None
+                return False, "后台窗口运行失败: 无法移动目标窗口"
+            self._window_restore_state = placement
+            return True, ""
+
+        if not self._window_hwnd or not self._window_utils:
+            return False, "离屏后台运行失败: 未绑定目标窗口"
+
+        placement = self._window_utils.move_window_offscreen(self._window_hwnd)
+        if not placement:
+            return False, "离屏后台运行失败: 无法移动目标窗口"
+
+        self._window_restore_state = placement
+        return True, ""
+
+    def _restore_window_after_run(self):
+        if self._window_restore_state and self._window_hwnd and self._window_utils:
+            try:
+                self._window_utils.restore_window_placement(self._window_hwnd, self._window_restore_state)
+            except Exception:
+                pass
+        self._window_restore_state = None
+        if self._window_taskbar_restore_state and self._window_hwnd and self._window_utils:
+            try:
+                self._window_utils.restore_window_taskbar_visibility(
+                    self._window_hwnd,
+                    self._window_taskbar_restore_state,
+                )
+            except Exception:
+                pass
+        self._window_taskbar_restore_state = None
     
     def _get_realtime_window_offset(self) -> Tuple[Optional[Tuple[int, int]], Optional[str]]:
         if not self._window_offset_provider:
@@ -207,6 +272,9 @@ class Player:
     
     def _activate_window_before_action(self, action: Action):
         if not self._window_hwnd or not self._window_utils:
+            return
+
+        if action.background_mode:
             return
         
         needs_window = action.action_type in [
@@ -247,6 +315,14 @@ class Player:
                 self._emit('on_window_not_found', window_title)
             else:
                 self._emit('on_window_error', None, -1, error_msg)
+            self.state = PlayerState.IDLE
+            self._emit('on_state_changed', self.state)
+            self._emit('on_finished', False)
+            return
+
+        success, error_msg = self._prepare_window_for_run()
+        if not success:
+            self._emit('on_window_error', None, -1, error_msg)
             self.state = PlayerState.IDLE
             self._emit('on_state_changed', self.state)
             self._emit('on_finished', False)
@@ -379,6 +455,7 @@ class Player:
                     return False
             
             self.state = PlayerState.IDLE
+            self._restore_window_after_run()
         return True
     
     def _interruptible_sleep(self, seconds: float):
@@ -519,6 +596,9 @@ class Player:
                         action.window_title = self._window_title
                     if action.background_mode and not action.window_title:
                         action.window_title = self._window_title
+                if self._window_hwnd:
+                    action._runtime_window_hwnd = self._window_hwnd
+                action._runtime_speed = self.speed
                 
                 try:
                     success = action.execute(window_offset=current_offset, should_stop=lambda: self._stop_flag, local_group_manager=self._local_group_manager)
@@ -535,6 +615,10 @@ class Player:
                         delattr(action, '_on_nested_sub_action_start')
                     if hasattr(action, '_on_nested_sub_action_end'):
                         delattr(action, '_on_nested_sub_action_end')
+                    if hasattr(action, '_runtime_window_hwnd'):
+                        delattr(action, '_runtime_window_hwnd')
+                    if hasattr(action, '_runtime_speed'):
+                        delattr(action, '_runtime_speed')
                 
                 completed_actions += 1
                 self._emit('on_progress', -1, i, repeat_count)
@@ -578,6 +662,9 @@ class Player:
 
         success = False
         try:
+            if self._window_hwnd:
+                action._runtime_window_hwnd = self._window_hwnd
+            action._runtime_speed = self.speed
             is_valid, window_error = self._validate_window_before_action(action)
             if not is_valid:
                 self._emit('on_window_error', action, index, window_error)
@@ -618,6 +705,11 @@ class Player:
 
             return success
         finally:
+            if hasattr(action, '_runtime_window_hwnd'):
+                delattr(action, '_runtime_window_hwnd')
+            if hasattr(action, '_runtime_speed'):
+                delattr(action, '_runtime_speed')
+            self._restore_window_after_run()
             finished_ok = bool(success) and not self._stop_flag
             self.state = PlayerState.IDLE
             self._emit('on_state_changed', self.state)

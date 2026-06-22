@@ -54,6 +54,16 @@ class VariableManager:
         return self._variables.copy()
 
 
+OFFSCREEN_BACKGROUND_ACTION_TYPES = {
+    ActionType.MOUSE_MOVE_RELATIVE,
+    ActionType.MOUSE_CLICK_RELATIVE,
+    ActionType.IMAGE_CLICK,
+    ActionType.IMAGE_WAIT_CLICK,
+    ActionType.IMAGE_CHECK,
+    ActionType.SCREENSHOT,
+}
+
+
 @dataclass
 class Action:
     action_type: ActionType
@@ -119,6 +129,16 @@ class Action:
             if not result:
                 return False
         return True
+
+    def _interruptible_sleep(self, seconds: float, should_stop: Optional[Callable[[], bool]] = None) -> bool:
+        remaining = max(0.0, float(seconds))
+        while remaining > 0:
+            if should_stop and should_stop():
+                return False
+            interval = min(0.1, remaining)
+            time.sleep(interval)
+            remaining -= interval
+        return True
     
     def _activate_window_for_image(self):
         if not self.window_title:
@@ -145,15 +165,48 @@ class Action:
         except Exception as e:
             print(f"[激活窗口失败] {e}")
 
+    def _get_runtime_window_hwnd(self) -> Optional[int]:
+        hwnd = getattr(self, '_runtime_window_hwnd', 0)
+        return hwnd or None
+
+    def _create_background_clicker(self):
+        from utils.background_click import create_background_clicker
+
+        runtime_hwnd = self._get_runtime_window_hwnd()
+        if runtime_hwnd:
+            clicker = create_background_clicker(hwnd=runtime_hwnd)
+            if clicker:
+                return clicker
+
+        if self.window_title:
+            return create_background_clicker(window_title=self.window_title)
+
+        return None
+
+    def _locate_in_image(self, pyautogui, image_path: str, haystack, confidence: float):
+        locate_fn = getattr(pyautogui, 'locate', None)
+        if locate_fn:
+            try:
+                return locate_fn(image_path, haystack, confidence=confidence)
+            except pyautogui.ImageNotFoundException:
+                return None
+            except TypeError:
+                return locate_fn(image_path, haystack)
+        return None
+
     def _get_window_client_region(self) -> Optional[Tuple[int, int, int, int]]:
-        if not self.window_title:
+        if not self.window_title and not self._get_runtime_window_hwnd():
             return None
         
         try:
             from utils.window_utils import WindowUtils
             
             window_utils = WindowUtils()
-            window = window_utils.get_window_by_title(self.window_title)
+            runtime_hwnd = self._get_runtime_window_hwnd()
+            if runtime_hwnd:
+                window = window_utils.get_window_by_hwnd(runtime_hwnd)
+            else:
+                window = window_utils.get_window_by_title(self.window_title)
             if not window:
                 return None
             
@@ -173,14 +226,18 @@ class Action:
             return None
 
     def _screen_to_window_client_coords(self, screen_x: int, screen_y: int) -> Optional[Tuple[int, int]]:
-        if not self.window_title:
+        if not self.window_title and not self._get_runtime_window_hwnd():
             return None
         
         try:
             from utils.window_utils import WindowUtils
             
             window_utils = WindowUtils()
-            window = window_utils.get_window_by_title(self.window_title)
+            runtime_hwnd = self._get_runtime_window_hwnd()
+            if runtime_hwnd:
+                window = window_utils.get_window_by_hwnd(runtime_hwnd)
+            else:
+                window = window_utils.get_window_by_title(self.window_title)
             if not window:
                 return None
             
@@ -189,12 +246,31 @@ class Action:
             print(f"[屏幕坐标转客户区坐标失败] {e}")
             return None
 
-    def _locate_image_on_screen(self, pyautogui, image_path: str, confidence: float):
+    def _locate_image(self, pyautogui, image_path: str, confidence: float):
+        if self.background_mode and (self.window_title or self._get_runtime_window_hwnd()):
+
+            clicker = self._create_background_clicker()
+            if not clicker:
+                raise Exception(f"未找到后台窗口: {self.window_title}")
+
+            captured = clicker.capture(background=True)
+            if captured is None:
+                raise Exception(f"后台截图失败: {self.window_title}")
+
+            try:
+                location = pyautogui.locate(image_path, captured, confidence=confidence)
+            except pyautogui.ImageNotFoundException:
+                location = None
+
+            return location, clicker, True
+
         locate_kwargs = {'confidence': confidence}
         region = self._get_window_client_region()
         if region:
             locate_kwargs['region'] = region
-        return pyautogui.locateOnScreen(image_path, **locate_kwargs)
+
+        location = pyautogui.locateOnScreen(image_path, **locate_kwargs)
+        return location, None, False
     
     def _execute_once(self, window_offset: Optional[Tuple[int, int]] = None, should_stop: Optional[Callable[[], bool]] = None, local_group_manager=None) -> bool:
         import pyautogui
@@ -275,7 +351,23 @@ class Action:
             elif self.action_type == ActionType.SCREENSHOT:
                 filename = self.params.get('filename', 'screenshot.png')
                 region = self.params.get('region')
-                pyautogui.screenshot(filename, region=region)
+                if self.background_mode and (self.window_title or self._get_runtime_window_hwnd()):
+                    from utils.background_click import create_background_clicker
+
+                    clicker = self._create_background_clicker()
+                    if not clicker:
+                        raise Exception(f"未找到后台窗口: {self.window_title}")
+
+                    captured = clicker.capture(background=True)
+                    if captured is None:
+                        raise Exception(f"后台截图失败: {self.window_title}")
+
+                    if region:
+                        left, top, width, height = region
+                        captured = captured.crop((left, top, left + width, top + height))
+                    captured.save(filename)
+                else:
+                    pyautogui.screenshot(filename, region=region)
             
             elif self.action_type == ActionType.MOUSE_MOVE_RELATIVE:
                 if window_offset:
@@ -284,15 +376,14 @@ class Action:
                 else:
                     x, y = self.params.get('x', 0), self.params.get('y', 0)
                 
-                if self.background_mode and self.window_title:
+                if self.background_mode and (self.window_title or self._get_runtime_window_hwnd()):
                     from utils.background_click import create_background_clicker
-                    clicker = create_background_clicker(window_title=self.window_title)
-                    if clicker:
-                        result = clicker.move(self.params.get('x', 0), self.params.get('y', 0), background=True)
-                        if not result.success:
-                            pyautogui.moveTo(x=x, y=y, duration=self.params.get('duration', 0.0))
-                    else:
-                        pyautogui.moveTo(x=x, y=y, duration=self.params.get('duration', 0.0))
+                    clicker = self._create_background_clicker()
+                    if not clicker:
+                        raise Exception(f"未找到后台窗口: {self.window_title}")
+                    result = clicker.move(self.params.get('x', 0), self.params.get('y', 0), background=True)
+                    if not result.success:
+                        raise Exception(result.message or "后台移动失败")
                 else:
                     pyautogui.moveTo(x=x, y=y, duration=self.params.get('duration', 0.0))
             
@@ -303,16 +394,15 @@ class Action:
                 else:
                     x, y = self.params.get('x', 0), self.params.get('y', 0)
                 
-                if self.background_mode and self.window_title:
+                if self.background_mode and (self.window_title or self._get_runtime_window_hwnd()):
                     from utils.background_click import create_background_clicker
-                    clicker = create_background_clicker(window_title=self.window_title)
-                    if clicker:
-                        button = self.params.get('button', 'left')
-                        result = clicker.click(self.params.get('x', 0), self.params.get('y', 0), button=button, background=True)
-                        if not result.success:
-                            pyautogui.click(x=x, y=y)
-                    else:
-                        pyautogui.click(x=x, y=y)
+                    clicker = self._create_background_clicker()
+                    if not clicker:
+                        raise Exception(f"未找到后台窗口: {self.window_title}")
+                    button = self.params.get('button', 'left')
+                    result = clicker.click(self.params.get('x', 0), self.params.get('y', 0), button=button, background=True)
+                    if not result.success:
+                        raise Exception(result.message or "后台点击失败")
                 else:
                     pyautogui.click(x=x, y=y)
             
@@ -328,9 +418,11 @@ class Action:
                     self._activate_window_for_image()
                 
                 location = None
+                clicker = None
+                location_is_client = False
                 for attempt in range(3):
                     try:
-                        location = self._locate_image_on_screen(pyautogui, image_path, confidence)
+                        location, clicker, location_is_client = self._locate_image(pyautogui, image_path, confidence)
                         if location:
                             break
                     except pyautogui.ImageNotFoundException:
@@ -339,22 +431,21 @@ class Action:
                 
                 if location:
                     center = pyautogui.center(location)
-                    if self.background_mode and self.window_title:
-                        from utils.background_click import create_background_clicker
-                        clicker = create_background_clicker(window_title=self.window_title)
-                        if clicker:
-                            client_coords = self._screen_to_window_client_coords(center.x, center.y)
-                            if client_coords:
-                                rel_x, rel_y = client_coords
-                            else:
-                                rect = clicker.rect
-                                rel_x = center.x - rect[0]
-                                rel_y = center.y - rect[1]
-                            result = clicker.click(rel_x, rel_y, background=True)
-                            if not result.success:
-                                pyautogui.click(center.x, center.y)
+                    if self.background_mode and (self.window_title or self._get_runtime_window_hwnd()):
+                        if not clicker:
+                            raise Exception(f"未找到后台窗口: {self.window_title or self._get_runtime_window_hwnd()}")
+
+                        if location_is_client:
+                            rel_x, rel_y = center.x, center.y
                         else:
-                            pyautogui.click(center.x, center.y)
+                            client_coords = self._screen_to_window_client_coords(center.x, center.y)
+                            if not client_coords:
+                                raise Exception("无法将识别位置转换为客户区坐标")
+                            rel_x, rel_y = client_coords
+
+                        result = clicker.click(rel_x, rel_y, background=True)
+                        if not result.success:
+                            raise Exception(result.message or "后台图片点击失败")
                     else:
                         pyautogui.click(center.x, center.y)
                 else:
@@ -373,12 +464,14 @@ class Action:
                     self._activate_window_for_image()
                 
                 location = None
+                clicker = None
+                location_is_client = False
                 start_time = time.time()
                 while (time.time() - start_time) < timeout:
                     if should_stop and should_stop():
                         return False
                     try:
-                        location = self._locate_image_on_screen(pyautogui, image_path, confidence)
+                        location, clicker, location_is_client = self._locate_image(pyautogui, image_path, confidence)
                         if location:
                             break
                     except pyautogui.ImageNotFoundException:
@@ -389,22 +482,21 @@ class Action:
                 
                 if location:
                     center = pyautogui.center(location)
-                    if self.background_mode and self.window_title:
-                        from utils.background_click import create_background_clicker
-                        clicker = create_background_clicker(window_title=self.window_title)
-                        if clicker:
-                            client_coords = self._screen_to_window_client_coords(center.x, center.y)
-                            if client_coords:
-                                rel_x, rel_y = client_coords
-                            else:
-                                rect = clicker.rect
-                                rel_x = center.x - rect[0]
-                                rel_y = center.y - rect[1]
-                            result = clicker.click(rel_x, rel_y, background=True)
-                            if not result.success:
-                                pyautogui.click(center.x, center.y)
+                    if self.background_mode and (self.window_title or self._get_runtime_window_hwnd()):
+                        if not clicker:
+                            raise Exception(f"未找到后台窗口: {self.window_title or self._get_runtime_window_hwnd()}")
+
+                        if location_is_client:
+                            rel_x, rel_y = center.x, center.y
                         else:
-                            pyautogui.click(center.x, center.y)
+                            client_coords = self._screen_to_window_client_coords(center.x, center.y)
+                            if not client_coords:
+                                raise Exception("无法将识别位置转换为客户区坐标")
+                            rel_x, rel_y = client_coords
+
+                        result = clicker.click(rel_x, rel_y, background=True)
+                        if not result.success:
+                            raise Exception(result.message or "后台图片点击失败")
                     else:
                         pyautogui.click(center.x, center.y)
                 else:
@@ -430,9 +522,11 @@ class Action:
                 var_manager = VariableManager.get_instance()
                 
                 location = None
+                clicker = None
+                location_is_client = False
                 for attempt in range(3):
                     try:
-                        location = self._locate_image_on_screen(pyautogui, image_path, confidence)
+                        location, clicker, location_is_client = self._locate_image(pyautogui, image_path, confidence)
                         if location:
                             break
                     except pyautogui.ImageNotFoundException:
@@ -470,11 +564,35 @@ class Action:
                         print(f"[条件跳过] {group_action.description} - 条件不满足: {group_action.condition}")
                         continue
                     
+                    original_use_relative_coords = group_action.use_relative_coords
+                    original_background_mode = group_action.background_mode
+                    original_window_title = group_action.window_title
+                    original_delay_after = group_action.delay_after
+                    had_runtime_hwnd = hasattr(group_action, '_runtime_window_hwnd')
+                    original_runtime_hwnd = getattr(group_action, '_runtime_window_hwnd', None)
+                    had_runtime_speed = hasattr(group_action, '_runtime_speed')
+                    original_runtime_speed = getattr(group_action, '_runtime_speed', None)
+
                     if group_action.action_type in [ActionType.MOUSE_CLICK_RELATIVE, ActionType.MOUSE_MOVE_RELATIVE]:
                         group_action.use_relative_coords = True
+
+                    if self.background_mode and group_action.action_type in [
+                        ActionType.MOUSE_CLICK_RELATIVE,
+                        ActionType.MOUSE_MOVE_RELATIVE,
+                        ActionType.IMAGE_CLICK,
+                        ActionType.IMAGE_WAIT_CLICK,
+                        ActionType.IMAGE_CHECK,
+                        ActionType.SCREENSHOT,
+                        ActionType.ACTION_GROUP_REF,
+                    ]:
+                        group_action.background_mode = True
                     
                     if self.window_title and not group_action.window_title:
                         group_action.window_title = self.window_title
+                    if self._get_runtime_window_hwnd():
+                        group_action._runtime_window_hwnd = self._get_runtime_window_hwnd()
+                    runtime_speed = getattr(self, '_runtime_speed', 1.0)
+                    group_action._runtime_speed = runtime_speed
                     
                     group_action._is_from_group = True
                     group_action._group_name = group_name
@@ -495,11 +613,40 @@ class Action:
                     
                     group_action._on_sub_action_start = on_nested_sub_start
                     group_action._on_sub_action_end = on_nested_sub_end
-                    
-                    group_action.execute(window_offset=window_offset, should_stop=should_stop, local_group_manager=local_group_manager)
+
+                    success = False
+                    try:
+                        adjusted_delay_before = group_action.delay_before / runtime_speed if runtime_speed > 0 else group_action.delay_before
+                        adjusted_delay_after = group_action.delay_after / runtime_speed if runtime_speed > 0 else group_action.delay_after
+                        group_action.delay_after = adjusted_delay_after
+
+                        if adjusted_delay_before > 0:
+                            if not self._interruptible_sleep(adjusted_delay_before, should_stop):
+                                return False
+
+                        success = group_action.execute(
+                            window_offset=window_offset,
+                            should_stop=should_stop,
+                            local_group_manager=local_group_manager,
+                        )
+                    finally:
+                        group_action.use_relative_coords = original_use_relative_coords
+                        group_action.background_mode = original_background_mode
+                        group_action.window_title = original_window_title
+                        group_action.delay_after = original_delay_after
+                        if had_runtime_hwnd:
+                            group_action._runtime_window_hwnd = original_runtime_hwnd
+                        elif hasattr(group_action, '_runtime_window_hwnd'):
+                            delattr(group_action, '_runtime_window_hwnd')
+                        if had_runtime_speed:
+                            group_action._runtime_speed = original_runtime_speed
+                        elif hasattr(group_action, '_runtime_speed'):
+                            delattr(group_action, '_runtime_speed')
                     
                     if hasattr(self, '_on_sub_action_end') and self._on_sub_action_end:
-                        self._on_sub_action_end(group_action, sub_index, True)
+                        self._on_sub_action_end(group_action, sub_index, success)
+                    if not success:
+                        return False
             
             time.sleep(self.delay_after)
             return True
@@ -590,6 +737,29 @@ class Action:
             return True
         except Exception:
             return True
+
+    def _locate_image(self, pyautogui, image_path: str, confidence: float):
+        if self.background_mode and (self.window_title or self._get_runtime_window_hwnd()):
+            clicker = self._create_background_clicker()
+            if not clicker:
+                raise Exception(f"未找到后台窗口: {self.window_title or self._get_runtime_window_hwnd()}")
+
+            captured = clicker.capture(background=True)
+            if captured is None:
+                captured = clicker.capture(background=False)
+            if captured is None:
+                raise Exception(f"后台截图失败: {self.window_title or self._get_runtime_window_hwnd()}")
+
+            location = self._locate_in_image(pyautogui, image_path, captured, confidence)
+            return location, clicker, True
+
+        locate_kwargs = {'confidence': confidence}
+        region = self._get_window_client_region()
+        if region:
+            locate_kwargs['region'] = region
+
+        location = pyautogui.locateOnScreen(image_path, **locate_kwargs)
+        return location, None, False
     
     def to_dict(self) -> Dict[str, Any]:
         data = {
@@ -769,6 +939,59 @@ class Action:
             code_lines.append(f"time.sleep({self.delay_after})")
         
         return '\n'.join([indent + line for line in code_lines])
+
+
+def _can_action_run_offscreen(
+    action: Action,
+    local_group_manager=None,
+    inherited_background: bool = False,
+    visited_groups: Optional[set] = None,
+) -> bool:
+    effective_background = action.background_mode or inherited_background
+
+    if action.action_type == ActionType.WAIT:
+        return True
+
+    if action.action_type in OFFSCREEN_BACKGROUND_ACTION_TYPES:
+        return effective_background
+
+    if action.action_type == ActionType.ACTION_GROUP_REF:
+        group_name = action.params.get('group_name', '')
+        if not group_name:
+            return False
+
+        if visited_groups is None:
+            visited_groups = set()
+        if group_name in visited_groups:
+            return False
+
+        from .action_group import ensure_action_group_available
+
+        group = ensure_action_group_available(group_name, local_group_manager)
+        if not group:
+            return False
+
+        next_visited = set(visited_groups)
+        next_visited.add(group_name)
+        next_background = action.background_mode or inherited_background
+        return all(
+            _can_action_run_offscreen(
+                sub_action,
+                local_group_manager=local_group_manager,
+                inherited_background=next_background,
+                visited_groups=next_visited,
+            )
+            for sub_action in group.actions
+        )
+
+    return False
+
+
+def can_actions_run_offscreen(actions: List[Action], local_group_manager=None) -> bool:
+    return all(
+        _can_action_run_offscreen(action, local_group_manager=local_group_manager)
+        for action in actions
+    )
 
 
 class ActionManager:

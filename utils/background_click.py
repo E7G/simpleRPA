@@ -20,6 +20,8 @@ WM_MBUTTONUP = 0x0208
 MK_LBUTTON = 0x0001
 MK_RBUTTON = 0x0002
 MK_MBUTTON = 0x0010
+PW_CLIENTONLY = 0x00000001
+PW_RENDERFULLCONTENT = 0x00000002
 
 
 @dataclass
@@ -253,6 +255,108 @@ class BackgroundClicker:
                 return BackgroundClickResult(True, "前台滚动成功", False)
             except Exception as e:
                 return BackgroundClickResult(False, f"前台滚动失败: {str(e)}", False)
+
+    def capture(self, background: bool = True):
+        """截取目标窗口客户区图像。"""
+        if not self._main_hwnd:
+            return None
+
+        target_hwnd = self._render_hwnd or self._main_hwnd
+        if background:
+            image = self._background_capture(target_hwnd)
+            if image is not None:
+                return image
+            return None
+
+        return self._foreground_capture(target_hwnd)
+
+    def _background_capture(self, hwnd: int):
+        try:
+            import win32gui
+            import win32ui
+            from PIL import Image
+
+            left, top, right, bottom = win32gui.GetClientRect(hwnd)
+            width = right - left
+            height = bottom - top
+            if width <= 0 or height <= 0:
+                return None
+
+            hwnd_dc = win32gui.GetWindowDC(hwnd)
+            mfc_dc = win32ui.CreateDCFromHandle(hwnd_dc)
+            save_dc = mfc_dc.CreateCompatibleDC()
+            bitmap = win32ui.CreateBitmap()
+            bitmap.CreateCompatibleBitmap(mfc_dc, width, height)
+            save_dc.SelectObject(bitmap)
+
+            result = 0
+            try:
+                for flags in (PW_RENDERFULLCONTENT, PW_CLIENTONLY, 0):
+                    result = user32.PrintWindow(hwnd, save_dc.GetSafeHdc(), flags)
+                    if result == 1:
+                        break
+
+                if result != 1:
+                    return None
+
+                bmp_info = bitmap.GetInfo()
+                bmp_bytes = bitmap.GetBitmapBits(True)
+                return Image.frombuffer(
+                    'RGB',
+                    (bmp_info['bmWidth'], bmp_info['bmHeight']),
+                    bmp_bytes,
+                    'raw',
+                    'BGRX',
+                    0,
+                    1
+                )
+            finally:
+                win32gui.DeleteObject(bitmap.GetHandle())
+                save_dc.DeleteDC()
+                mfc_dc.DeleteDC()
+                win32gui.ReleaseDC(hwnd, hwnd_dc)
+        except Exception:
+            return None
+
+    def _foreground_capture(self, hwnd: int):
+        try:
+            import pyautogui
+
+            rect = self._get_client_rect_screen(hwnd)
+            if not rect:
+                return None
+
+            return pyautogui.screenshot(region=rect)
+        except Exception:
+            return None
+
+    def _get_client_rect_screen(self, hwnd: int) -> Optional[Tuple[int, int, int, int]]:
+        try:
+            import win32gui
+
+            left, top, right, bottom = win32gui.GetClientRect(hwnd)
+            top_left = self._client_to_screen(hwnd, left, top)
+            bottom_right = self._client_to_screen(hwnd, right, bottom)
+            if not top_left or not bottom_right:
+                return None
+
+            return (
+                top_left[0],
+                top_left[1],
+                max(0, bottom_right[0] - top_left[0]),
+                max(0, bottom_right[1] - top_left[1])
+            )
+        except Exception:
+            return None
+
+    def _client_to_screen(self, hwnd: int, x: int, y: int) -> Optional[Tuple[int, int]]:
+        try:
+            point = wintypes.POINT(x, y)
+            if user32.ClientToScreen(hwnd, ctypes.byref(point)):
+                return (point.x, point.y)
+            return None
+        except Exception:
+            return None
     
     @staticmethod
     def _make_lparam(x: int, y: int):

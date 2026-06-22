@@ -6,6 +6,9 @@ from typing import List, Optional, Tuple
 
 
 user32 = ctypes.windll.user32 if sys.platform == 'win32' else None
+GWL_EXSTYLE = -20
+WS_EX_APPWINDOW = 0x00040000
+WS_EX_TOOLWINDOW = 0x00000080
 
 
 class POINT(ctypes.Structure):
@@ -142,6 +145,166 @@ class WindowUtils:
         try:
             win32gui.ShowWindow(hwnd, win32con.SW_RESTORE)
             win32gui.SetForegroundWindow(hwnd)
+            return True
+        except Exception:
+            return False
+
+    def move_window_offscreen(self, hwnd: int) -> Optional[dict]:
+        if not self._win32_available or not user32:
+            return None
+
+        import win32gui
+        import win32con
+
+        try:
+            if not win32gui.IsWindow(hwnd):
+                return None
+
+            rect = win32gui.GetWindowRect(hwnd)
+            placement = win32gui.GetWindowPlacement(hwnd)
+            width = max(1, rect[2] - rect[0])
+            height = max(1, rect[3] - rect[1])
+
+            if win32gui.IsIconic(hwnd):
+                win32gui.ShowWindow(hwnd, win32con.SW_RESTORE)
+
+            virtual_left = user32.GetSystemMetrics(76)
+            virtual_top = user32.GetSystemMetrics(77)
+            virtual_width = user32.GetSystemMetrics(78)
+            virtual_height = user32.GetSystemMetrics(79)
+
+            offscreen_x = virtual_left + virtual_width + 120
+            max_top = virtual_top + max(0, virtual_height - height - 40)
+            offscreen_y = min(max(rect[1], virtual_top + 40), max_top)
+
+            win32gui.SetWindowPos(
+                hwnd,
+                None,
+                offscreen_x,
+                offscreen_y,
+                width,
+                height,
+                win32con.SWP_NOZORDER | win32con.SWP_NOACTIVATE,
+            )
+            win32gui.UpdateWindow(hwnd)
+
+            return {
+                'rect': rect,
+                'show_cmd': placement[1],
+            }
+        except Exception:
+            return None
+
+    def set_window_taskbar_visibility(self, hwnd: int, visible: bool) -> Optional[dict]:
+        if not self._win32_available or not user32:
+            return None
+
+        import win32gui
+        import win32con
+
+        try:
+            if not win32gui.IsWindow(hwnd):
+                return None
+
+            current_exstyle = user32.GetWindowLongW(hwnd, GWL_EXSTYLE)
+            desired_exstyle = current_exstyle
+            if visible:
+                desired_exstyle |= WS_EX_APPWINDOW
+                desired_exstyle &= ~WS_EX_TOOLWINDOW
+            else:
+                desired_exstyle &= ~WS_EX_APPWINDOW
+                desired_exstyle |= WS_EX_TOOLWINDOW
+
+            if desired_exstyle != current_exstyle:
+                user32.SetWindowLongW(hwnd, GWL_EXSTYLE, desired_exstyle)
+                win32gui.SetWindowPos(
+                    hwnd,
+                    None,
+                    0,
+                    0,
+                    0,
+                    0,
+                    win32con.SWP_NOMOVE
+                    | win32con.SWP_NOSIZE
+                    | win32con.SWP_NOZORDER
+                    | win32con.SWP_NOACTIVATE
+                    | win32con.SWP_FRAMECHANGED,
+                )
+                win32gui.UpdateWindow(hwnd)
+
+            return {'exstyle': current_exstyle}
+        except Exception:
+            return None
+
+    def restore_window_taskbar_visibility(self, hwnd: int, state: Optional[dict]) -> bool:
+        if not self._win32_available or not user32 or not state:
+            return False
+
+        import win32gui
+        import win32con
+
+        try:
+            if not win32gui.IsWindow(hwnd):
+                return False
+
+            original_exstyle = state.get('exstyle')
+            if original_exstyle is None:
+                return False
+
+            user32.SetWindowLongW(hwnd, GWL_EXSTYLE, int(original_exstyle))
+            win32gui.SetWindowPos(
+                hwnd,
+                None,
+                0,
+                0,
+                0,
+                0,
+                win32con.SWP_NOMOVE
+                | win32con.SWP_NOSIZE
+                | win32con.SWP_NOZORDER
+                | win32con.SWP_NOACTIVATE
+                | win32con.SWP_FRAMECHANGED,
+            )
+            win32gui.UpdateWindow(hwnd)
+            return True
+        except Exception:
+            return False
+
+    def restore_window_placement(self, hwnd: int, placement_info: Optional[dict]) -> bool:
+        if not self._win32_available or not placement_info:
+            return False
+
+        import win32gui
+        import win32con
+
+        try:
+            if not win32gui.IsWindow(hwnd):
+                return False
+
+            rect = placement_info.get('rect')
+            show_cmd = placement_info.get('show_cmd', win32con.SW_SHOWNORMAL)
+            if rect and len(rect) == 4:
+                width = max(1, rect[2] - rect[0])
+                height = max(1, rect[3] - rect[1])
+                win32gui.SetWindowPos(
+                    hwnd,
+                    None,
+                    rect[0],
+                    rect[1],
+                    width,
+                    height,
+                    win32con.SWP_NOZORDER | win32con.SWP_NOACTIVATE,
+                )
+
+            if show_cmd in (win32con.SW_SHOWMINIMIZED, win32con.SW_MINIMIZE, win32con.SW_SHOWMINNOACTIVE):
+                win32gui.ShowWindow(hwnd, win32con.SW_MINIMIZE)
+            elif show_cmd == win32con.SW_SHOWMAXIMIZED:
+                win32gui.ShowWindow(hwnd, win32con.SW_MAXIMIZE)
+            elif show_cmd == win32con.SW_HIDE:
+                win32gui.ShowWindow(hwnd, win32con.SW_HIDE)
+            else:
+                win32gui.ShowWindow(hwnd, win32con.SW_SHOWNOACTIVATE)
+
             return True
         except Exception:
             return False

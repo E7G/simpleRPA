@@ -39,6 +39,8 @@ class Config:
     schedule_last_run_date: str = ''
 
     minimize_to_tray: bool = True
+    run_window_offscreen: bool = False
+    run_window_hide_taskbar: bool = False
 
     _config_path: str = field(default='', repr=False)
     
@@ -84,6 +86,8 @@ class Config:
                 'schedule_prompt_countdown': self.schedule_prompt_countdown,
                 'schedule_last_run_date': self.schedule_last_run_date,
                 'minimize_to_tray': self.minimize_to_tray,
+                'run_window_offscreen': self.run_window_offscreen,
+                'run_window_hide_taskbar': self.run_window_hide_taskbar,
             }
             
             with open(save_path, 'w', encoding='utf-8') as f:
@@ -133,6 +137,8 @@ class Config:
             self.schedule_prompt_countdown = data.get('schedule_prompt_countdown', 15)
             self.schedule_last_run_date = data.get('schedule_last_run_date', '')
             self.minimize_to_tray = data.get('minimize_to_tray', True)
+            self.run_window_offscreen = data.get('run_window_offscreen', False)
+            self.run_window_hide_taskbar = data.get('run_window_hide_taskbar', False)
 
             return True
         except Exception as e:

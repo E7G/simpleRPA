@@ -420,6 +420,20 @@ class TestPlayer(unittest.TestCase):
         player.actions = actions
         self.assertEqual(len(player.actions), 1)
 
+    def test_background_action_does_not_activate_window(self):
+        from core.actions import Action, ActionType
+
+        player = self.Player()
+        player._window_hwnd = 123
+        player._window_utils = MagicMock()
+
+        action = Action(action_type=ActionType.MOUSE_CLICK_RELATIVE, params={'x': 1, 'y': 2})
+        action.background_mode = True
+
+        player._activate_window_before_action(action)
+
+        player._window_utils.activate_window.assert_not_called()
+
 
 class TestWindowOffsetProvider(unittest.TestCase):
     def test_get_current_offset_prefers_client_origin(self):
@@ -480,13 +494,73 @@ class TestActionImageLookup(unittest.TestCase):
         mock_pyautogui = MagicMock()
         action._get_window_client_region = MagicMock(return_value=(1, 2, 3, 4))
 
-        action._locate_image_on_screen(mock_pyautogui, 'dummy.png', 0.9)
+        location, clicker, is_client = action._locate_image(mock_pyautogui, 'dummy.png', 0.9)
 
         mock_pyautogui.locateOnScreen.assert_called_once_with(
             'dummy.png',
             confidence=0.9,
             region=(1, 2, 3, 4)
         )
+        self.assertIs(location, mock_pyautogui.locateOnScreen.return_value)
+        self.assertIsNone(clicker)
+        self.assertFalse(is_client)
+
+    def test_background_locate_uses_window_capture(self):
+        from core.actions import Action, ActionType
+
+        action = Action(action_type=ActionType.IMAGE_CHECK, params={'image_path': 'dummy.png'})
+        action.window_title = '测试窗口'
+        action.background_mode = True
+
+        mock_pyautogui = MagicMock()
+        mock_pyautogui.locate.return_value = ('match',)
+
+        with patch('utils.background_click.create_background_clicker') as mock_factory:
+            clicker = mock_factory.return_value
+            clicker.capture.return_value = 'captured-image'
+
+            location, used_clicker, is_client = action._locate_image(mock_pyautogui, 'dummy.png', 0.88)
+
+        self.assertEqual(location, ('match',))
+        self.assertIs(used_clicker, clicker)
+        self.assertTrue(is_client)
+        clicker.capture.assert_called_once_with(background=True)
+        mock_pyautogui.locate.assert_called_once_with('dummy.png', 'captured-image', confidence=0.88)
+
+
+class TestOffscreenBackgroundMode(unittest.TestCase):
+    def test_wait_action_can_run_offscreen(self):
+        from core.actions import Action, ActionType, can_actions_run_offscreen
+
+        action = Action(action_type=ActionType.WAIT, params={'seconds': 1})
+        self.assertTrue(can_actions_run_offscreen([action]))
+
+    def test_relative_background_action_can_run_offscreen(self):
+        from core.actions import Action, ActionType, can_actions_run_offscreen
+
+        action = Action(action_type=ActionType.MOUSE_CLICK_RELATIVE, params={'x': 1, 'y': 2})
+        action.background_mode = True
+        self.assertTrue(can_actions_run_offscreen([action]))
+
+    def test_foreground_key_action_cannot_run_offscreen(self):
+        from core.actions import Action, ActionType, can_actions_run_offscreen
+
+        action = Action(action_type=ActionType.KEY_PRESS, params={'key': 'enter'})
+        self.assertFalse(can_actions_run_offscreen([action]))
+
+    def test_group_inherits_background_for_offscreen(self):
+        from core.actions import Action, ActionType, can_actions_run_offscreen
+        from core.action_group import LocalActionGroupManager, ActionGroup
+
+        local_group_manager = LocalActionGroupManager()
+        local_group_manager.save_group(ActionGroup(
+            name='test-group',
+            actions=[Action(action_type=ActionType.IMAGE_CHECK, params={'image_path': __file__})]
+        ))
+
+        action = Action(action_type=ActionType.ACTION_GROUP_REF, params={'group_name': 'test-group'})
+        action.background_mode = True
+        self.assertTrue(can_actions_run_offscreen([action], local_group_manager=local_group_manager))
 
 
 class TestExporter(unittest.TestCase):

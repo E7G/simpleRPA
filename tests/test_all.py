@@ -306,7 +306,7 @@ class TestActionGroup(unittest.TestCase):
 
 class TestActionGroupManager(unittest.TestCase):
     def setUp(self):
-        from core.action_group import ActionGroup, ActionGroupManager
+        from core.action_group import ActionGroup, GlobalActionGroupManager
         from core.actions import Action, ActionType
         
         self.ActionGroup = ActionGroup
@@ -314,7 +314,7 @@ class TestActionGroupManager(unittest.TestCase):
         self.ActionType = ActionType
         
         self.temp_dir = tempfile.mkdtemp()
-        self.manager = ActionGroupManager()
+        self.manager = GlobalActionGroupManager()
         self.manager._groups_dir = self.temp_dir
         self.manager._groups = {}
     
@@ -739,7 +739,7 @@ class TestIntegration(unittest.TestCase):
     
     def test_action_group_workflow(self):
         from core.actions import Action, ActionType
-        from core.action_group import ActionGroup, ActionGroupManager
+        from core.action_group import ActionGroup, GlobalActionGroupManager
         
         actions = [
             Action(action_type=ActionType.MOUSE_CLICK, params={'x': 100, 'y': 200}, name="点击登录"),
@@ -749,7 +749,7 @@ class TestIntegration(unittest.TestCase):
         group = ActionGroup(name="登录流程", description="自动登录", actions=actions)
         
         temp_dir = tempfile.mkdtemp()
-        manager = ActionGroupManager()
+        manager = GlobalActionGroupManager()
         manager._groups_dir = temp_dir
         manager._groups = {}
         

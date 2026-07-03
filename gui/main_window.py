@@ -66,6 +66,7 @@ class MainWindow(MSFluentWindow):
         # 从而恢复正确的 UI/状态文案，并避免误触发整段运行的完成通知。
         self._single_debug_active = False
         self._single_debug_index = -1
+        self._tray_minimize_notified = False
         
         self._setup_ui()
         self._setup_navigation()
@@ -168,6 +169,11 @@ class MainWindow(MSFluentWindow):
         )
         tb.addWidget(InlineNumericField("重复", self._repeat_spin))
         
+        
+        self._offscreen_cb = CheckBox("离屏后台(隐藏图标)")
+        self._offscreen_cb.setToolTip("把目标窗口移到屏幕外并隐藏任务栏图标，结束后自动恢复")
+        tb.addWidget(self._offscreen_cb)
+        
         self._infinite_cb = CheckBox("无限")
         self._infinite_cb.stateChanged.connect(self._on_infinite_changed)
         tb.addWidget(self._infinite_cb)
@@ -177,14 +183,6 @@ class MainWindow(MSFluentWindow):
         )
         self._timeout_spin.setSpecialValueText("∞")
         tb.addWidget(InlineNumericField("超时", self._timeout_spin))
-        
-        self._offscreen_cb = CheckBox("离屏后台")
-        self._offscreen_cb.setToolTip("把目标窗口移到屏幕外运行，结束后自动恢复")
-        tb.addWidget(self._offscreen_cb)
-        self._hide_taskbar_cb = CheckBox("隐藏任务栏图标")
-        self._hide_taskbar_cb.setToolTip("运行时隐藏目标窗口在任务栏上的图标，结束后自动恢复")
-        tb.addWidget(self._hide_taskbar_cb)
-
         tb.addStretch()
         
         self._run_btn = PrimaryPushButton(FluentIcon.PLAY, "运行")
@@ -462,7 +460,7 @@ class MainWindow(MSFluentWindow):
         self._infinite_cb.setChecked(self._config.infinite_loop)
         self._timeout_spin.setValue(self._config.timeout_seconds)
         self._offscreen_cb.setChecked(self._config.run_window_offscreen)
-        self._hide_taskbar_cb.setChecked(self._config.run_window_hide_taskbar)
+
         
         if self._config.open_tabs:
             self._restore_open_tabs()
@@ -514,7 +512,7 @@ class MainWindow(MSFluentWindow):
         self._config.infinite_loop = self._infinite_cb.isChecked()
         self._config.timeout_seconds = self._timeout_spin.value()
         self._config.run_window_offscreen = self._offscreen_cb.isChecked()
-        self._config.run_window_hide_taskbar = self._hide_taskbar_cb.isChecked()
+
         
         all_tabs = self._script_editor.get_all_tabs()
         all_local_groups = self._script_editor.get_all_local_groups()
@@ -541,10 +539,6 @@ class MainWindow(MSFluentWindow):
             if self._config.minimize_to_tray:
                 event.ignore()
                 self.hide()
-                self._tray_service.show_message(
-                    "SimpleRPA 仍在运行",
-                    "已最小化到系统托盘，定时任务将在后台继续。右键托盘图标可退出。"
-                )
                 return
 
         has_unsaved = any(self._tab_modified.values())
@@ -877,15 +871,10 @@ class MainWindow(MSFluentWindow):
         player.set_window_title(window_title)
 
         offscreen_requested = bool(selected_hwnd and self._offscreen_cb.isChecked())
-        hide_taskbar_requested = bool(selected_hwnd and self._hide_taskbar_cb.isChecked())
         offscreen_supported = can_actions_run_offscreen(actions, local_group_manager=player.get_local_group_manager()) if offscreen_requested else False
         offscreen_enabled = offscreen_requested
-        if offscreen_enabled and hide_taskbar_requested:
+        if offscreen_enabled:
             run_mode = "offscreen_hidden_taskbar"
-        elif offscreen_enabled:
-            run_mode = "offscreen"
-        elif hide_taskbar_requested:
-            run_mode = "hidden_taskbar"
         else:
             run_mode = "normal"
         player.set_window_run_mode(run_mode)
@@ -1077,15 +1066,10 @@ class MainWindow(MSFluentWindow):
                 target_action.window_title = window_title
 
         offscreen_requested = bool(selected_hwnd and self._offscreen_cb.isChecked())
-        hide_taskbar_requested = bool(selected_hwnd and self._hide_taskbar_cb.isChecked())
         offscreen_supported = can_actions_run_offscreen([target_action], local_group_manager=player.get_local_group_manager()) if offscreen_requested else False
         offscreen_enabled = offscreen_requested
-        if offscreen_enabled and hide_taskbar_requested:
+        if offscreen_enabled:
             run_mode = "offscreen_hidden_taskbar"
-        elif offscreen_enabled:
-            run_mode = "offscreen"
-        elif hide_taskbar_requested:
-            run_mode = "hidden_taskbar"
         else:
             run_mode = "normal"
         player.set_window_run_mode(run_mode)

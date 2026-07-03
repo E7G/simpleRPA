@@ -1,716 +1,716 @@
-import time
-import threading
-from typing import List, Callable, Optional, Tuple
-from enum import Enum
-from .actions import Action, ActionType
-
-
-class PlayerState(Enum):
-    IDLE = "idle"
-    PLAYING = "playing"
-    PAUSED = "paused"
-    STOPPED = "stopped"
-
-
-class WindowOffsetProvider:
-    def __init__(self, hwnd: int = 0, window_utils=None):
-        self._hwnd = hwnd
-        self._window_utils = window_utils
-        self._last_offset: Optional[Tuple[int, int]] = None
-        self._last_error: Optional[str] = None
-    
-    def set_hwnd(self, hwnd: int):
-        self._hwnd = hwnd
-    
-    def set_window_utils(self, window_utils):
-        self._window_utils = window_utils
-    
-    def get_current_offset(self) -> Tuple[Optional[Tuple[int, int]], Optional[str]]:
-        if not self._hwnd:
-            return None, None
-        
-        if not self._window_utils:
-            return None, "窗口工具不可用"
-        
-        try:
-            window_info = self._window_utils.get_window_by_hwnd(self._hwnd)
-            if not window_info:
-                return None, f"窗口不存在或已关闭 (句柄: {self._hwnd})"
-            
-            # 录制/选窗时使用的是客户区左上角，因此运行时也必须保持同一坐标基准。
-            client_origin = None
-            if hasattr(self._window_utils, 'client_to_screen_coords'):
-                client_origin = self._window_utils.client_to_screen_coords(self._hwnd, 0, 0)
-            
-            self._last_offset = client_origin or (window_info.x, window_info.y)
-            self._last_error = None
-            return self._last_offset, None
-        except Exception as e:
-            self._last_error = str(e)
-            return None, self._last_error
-    
-    def validate_window(self) -> Tuple[bool, str]:
-        if not self._hwnd:
-            return True, ""
-        
-        if not self._window_utils:
-            return True, ""
-        
-        try:
-            window_info = self._window_utils.get_window_by_hwnd(self._hwnd)
-            if not window_info:
-                return False, f"窗口不存在或已关闭 (句柄: {self._hwnd})"
-            return True, ""
-        except Exception as e:
-            return False, str(e)
-
-
-class Player:
-    def __init__(self, tab_key: str = "", local_group_manager=None):
-        self._tab_key = tab_key
-        self._state = PlayerState.IDLE
-        self._state_lock = threading.Lock()
-        self.actions: List[Action] = []
-        self.current_index: int = 0
-        self.speed: float = 1.0
-        self.repeat_count: int = 1
-        self.current_repeat: int = 0
-        self.infinite_loop: bool = False
-        self.timeout_seconds: float = 0
-        self._local_group_manager = local_group_manager
-        
-        self._thread: Optional[threading.Thread] = None
-        self._pause_event = threading.Event()
-        self._stop_flag = False
-        self._window_offset: Optional[Tuple[int, int]] = None
-        self._window_title: str = ""
-        self._start_time: float = 0
-        
-        self._window_offset_provider: Optional[WindowOffsetProvider] = None
-        self._window_hwnd: int = 0
-        self._window_utils = None
-        self._window_run_mode: str = "normal"
-        self._window_restore_state = None
-        self._window_taskbar_restore_state = None
-        
-        self._callbacks = {
-            'on_action_start': [],
-            'on_action_end': [],
-            'on_state_changed': [],
-            'on_progress': [],
-            'on_error': [],
-            'on_finished': [],
-            'on_repeat_changed': [],
-            'on_window_error': [],
-            'on_window_launching': [],
-            'on_window_found': [],
-            'on_window_not_found': [],
-            'on_sub_action_start': [],
-            'on_sub_action_end': []
-        }
-    
-    def set_local_group_manager(self, manager):
-        self._local_group_manager = manager
-    
-    def get_local_group_manager(self):
-        return self._local_group_manager
-    
-    @property
-    def state(self) -> PlayerState:
-        with self._state_lock:
-            return self._state
-    
-    @state.setter
-    def state(self, value: PlayerState):
-        with self._state_lock:
-            self._state = value
-    
-    def add_callback(self, event: str, callback: Callable):
-        if event in self._callbacks:
-            self._callbacks[event].append(callback)
-    
-    def remove_callback(self, event: str, callback: Callable):
-        if event in self._callbacks and callback in self._callbacks[event]:
-            self._callbacks[event].remove(callback)
-    
-    def _emit(self, event: str, *args, **kwargs):
-        for callback in self._callbacks.get(event, []):
-            try:
-                callback(*args, **kwargs)
-            except Exception as e:
-                print(f"Callback error: {e}")
-    
-    def set_actions(self, actions: List[Action]):
-        if self.state != PlayerState.IDLE:
-            return
-        self.actions = actions.copy()
-    
-    def set_speed(self, speed: float):
-        self.speed = max(0.1, min(10.0, speed))
-    
-    def set_repeat_count(self, count: int):
-        self.repeat_count = max(1, count)
-    
-    def set_infinite_loop(self, enabled: bool):
-        self.infinite_loop = enabled
-    
-    def set_timeout(self, seconds: float):
-        self.timeout_seconds = max(0, seconds)
-    
-    def set_window_offset(self, offset: Optional[Tuple[int, int]]):
-        self._window_offset = offset
-    
-    def set_window_title(self, title: str):
-        self._window_title = title
-    
-    def set_window_hwnd(self, hwnd: int, window_utils=None):
-        self._window_hwnd = hwnd
-        self._window_utils = window_utils
-        
-        if hwnd and window_utils:
-            if not self._window_offset_provider:
-                self._window_offset_provider = WindowOffsetProvider(hwnd, window_utils)
-            else:
-                self._window_offset_provider.set_hwnd(hwnd)
-                self._window_offset_provider.set_window_utils(window_utils)
-        else:
-            self._window_offset_provider = None
-
-    def set_window_run_mode(self, mode: str):
-        allowed_modes = ("normal", "offscreen", "hidden_taskbar", "offscreen_hidden_taskbar")
-        self._window_run_mode = mode if mode in allowed_modes else "normal"
-
-    def _prepare_window_for_run(self) -> Tuple[bool, str]:
-        if self._window_run_mode == "normal":
-            return True, ""
-
-        if self._window_run_mode == "hidden_taskbar":
-            if not self._window_hwnd or not self._window_utils:
-                return False, "后台窗口运行失败: 未绑定目标窗口"
-            taskbar_state = self._window_utils.set_window_taskbar_visibility(self._window_hwnd, visible=False)
-            if not taskbar_state:
-                return False, "后台窗口运行失败: 无法隐藏任务栏图标"
-            self._window_taskbar_restore_state = taskbar_state
-            return True, ""
-
-        if self._window_run_mode == "offscreen_hidden_taskbar":
-            if not self._window_hwnd or not self._window_utils:
-                return False, "后台窗口运行失败: 未绑定目标窗口"
-            taskbar_state = self._window_utils.set_window_taskbar_visibility(self._window_hwnd, visible=False)
-            if not taskbar_state:
-                return False, "后台窗口运行失败: 无法隐藏任务栏图标"
-            self._window_taskbar_restore_state = taskbar_state
-            placement = self._window_utils.move_window_offscreen(self._window_hwnd)
-            if not placement:
-                self._window_utils.restore_window_taskbar_visibility(
-                    self._window_hwnd,
-                    self._window_taskbar_restore_state,
-                )
-                self._window_taskbar_restore_state = None
-                return False, "后台窗口运行失败: 无法移动目标窗口"
-            self._window_restore_state = placement
-            return True, ""
-
-        if not self._window_hwnd or not self._window_utils:
-            return False, "离屏后台运行失败: 未绑定目标窗口"
-
-        placement = self._window_utils.move_window_offscreen(self._window_hwnd)
-        if not placement:
-            return False, "离屏后台运行失败: 无法移动目标窗口"
-
-        self._window_restore_state = placement
-        return True, ""
-
-    def _restore_window_after_run(self):
-        if self._window_restore_state and self._window_hwnd and self._window_utils:
-            try:
-                self._window_utils.restore_window_placement(self._window_hwnd, self._window_restore_state)
-            except Exception:
-                pass
-        self._window_restore_state = None
-        if self._window_taskbar_restore_state and self._window_hwnd and self._window_utils:
-            try:
-                self._window_utils.restore_window_taskbar_visibility(
-                    self._window_hwnd,
-                    self._window_taskbar_restore_state,
-                )
-            except Exception:
-                pass
-        self._window_taskbar_restore_state = None
-    
-    def _get_realtime_window_offset(self) -> Tuple[Optional[Tuple[int, int]], Optional[str]]:
-        if not self._window_offset_provider:
-            return self._window_offset, None
-        
-        offset, error = self._window_offset_provider.get_current_offset()
-        if error:
-            return None, error
-        
-        return offset, None
-    
-    def _validate_window_before_action(self, action: Action) -> Tuple[bool, Optional[str]]:
-        if not self._window_offset_provider:
-            return True, None
-        
-        needs_window = action.action_type in [
-            ActionType.MOUSE_CLICK_RELATIVE,
-            ActionType.MOUSE_MOVE_RELATIVE,
-            ActionType.MOUSE_DRAG,
-        ]
-        
-        if action.use_relative_coords:
-            needs_window = True
-        
-        if not needs_window:
-            return True, None
-        
-        is_valid, error = self._window_offset_provider.validate_window()
-        if not is_valid:
-            return False, error
-        
-        return True, None
-    
-    def _activate_window_before_action(self, action: Action):
-        if not self._window_hwnd or not self._window_utils:
-            return
-
-        if action.background_mode:
-            return
-        
-        needs_window = action.action_type in [
-            ActionType.MOUSE_CLICK_RELATIVE,
-            ActionType.MOUSE_MOVE_RELATIVE,
-            ActionType.MOUSE_DRAG,
-        ]
-        
-        if action.use_relative_coords:
-            needs_window = True
-        
-        if not needs_window:
-            return
-        
-        try:
-            self._window_utils.activate_window(self._window_hwnd)
-            time.sleep(0.05)
-        except Exception as e:
-            print(f"[激活窗口失败] {e}")
-    
-    def play(self):
-        if self.state == PlayerState.PLAYING:
-            return
-        
-        if not self.actions:
-            return
-        
-        if self.state == PlayerState.PAUSED:
-            self.state = PlayerState.PLAYING
-            self._pause_event.set()
-            self._emit('on_state_changed', self.state)
-            return
-        
-        success, error_msg = self._ensure_target_window_exists()
-        if not success:
-            if error_msg and error_msg.startswith("window_not_found:"):
-                window_title = error_msg[len("window_not_found:"):]
-                self._emit('on_window_not_found', window_title)
-            else:
-                self._emit('on_window_error', None, -1, error_msg)
-            self.state = PlayerState.IDLE
-            self._emit('on_state_changed', self.state)
-            self._emit('on_finished', False)
-            return
-
-        success, error_msg = self._prepare_window_for_run()
-        if not success:
-            self._emit('on_window_error', None, -1, error_msg)
-            self.state = PlayerState.IDLE
-            self._emit('on_state_changed', self.state)
-            self._emit('on_finished', False)
-            return
-        
-        self.state = PlayerState.PLAYING
-        self.current_index = 0
-        self.current_repeat = 0
-        self._stop_flag = False
-        self._pause_event.set()
-        self._start_time = time.time()
-        
-        self._thread = threading.Thread(target=self._run, daemon=True)
-        self._thread.start()
-        
-        self._emit('on_state_changed', self.state)
-    
-    def _ensure_target_window_exists(self) -> Tuple[bool, str]:
-        if not self._window_title:
-            return True, ""
-        
-        try:
-            import win32gui
-            
-            def find_window_by_title(title_pattern: str) -> Optional[int]:
-                windows_found = []
-                
-                def enum_callback(hwnd, _):
-                    if win32gui.IsWindowVisible(hwnd):
-                        title = win32gui.GetWindowText(hwnd)
-                        if title_pattern.lower() in title.lower():
-                            windows_found.append(hwnd)
-                    return True
-                
-                win32gui.EnumWindows(enum_callback, None)
-                return windows_found[0] if windows_found else None
-            
-            existing_hwnd = find_window_by_title(self._window_title)
-            if existing_hwnd:
-                return True, ""
-            
-            from core.command_manager import CommandManager
-            cmd_manager = CommandManager.get_instance()
-            commands = cmd_manager.get_all_commands()
-            
-            matched_cmd = None
-            for cmd in commands:
-                if cmd.window_title_pattern and cmd.window_title_pattern.lower() in self._window_title.lower():
-                    matched_cmd = cmd
-                    break
-                if cmd.name.lower() in self._window_title.lower():
-                    matched_cmd = cmd
-                    break
-            
-            if matched_cmd:
-                self._emit('on_window_launching', matched_cmd.name)
-                
-                success, message, already_running = cmd_manager.check_and_launch(matched_cmd.id)
-                if not success:
-                    return False, f"启动命令执行失败: {message}"
-                
-                max_wait = 30
-                wait_interval = 0.5
-                waited = 0
-                
-                while waited < max_wait:
-                    if self._stop_flag:
-                        return False, "用户取消"
-                    
-                    hwnd = find_window_by_title(self._window_title)
-                    if hwnd:
-                        self._emit('on_window_found', self._window_title)
-                        return True, ""
-                    
-                    time.sleep(wait_interval)
-                    waited += wait_interval
-                
-                return False, f"等待窗口超时: 已执行启动命令 '{matched_cmd.name}'，但窗口 '{self._window_title}' 未在 {max_wait} 秒内出现"
-            else:
-                return False, f"window_not_found:{self._window_title}"
-                
-        except Exception as e:
-            return False, f"窗口检查失败: {str(e)}"
-    
-    def pause(self):
-        if self.state == PlayerState.PLAYING:
-            self.state = PlayerState.PAUSED
-            self._pause_event.clear()
-            self._emit('on_state_changed', self.state)
-    
-    def resume(self):
-        if self.state == PlayerState.PAUSED:
-            self.state = PlayerState.PLAYING
-            self._pause_event.set()
-            self._emit('on_state_changed', self.state)
-    
-    def toggle_pause(self) -> PlayerState:
-        with self._state_lock:
-            if self._state == PlayerState.PLAYING:
-                self._state = PlayerState.PAUSED
-                self._pause_event.clear()
-                result_state = self._state
-            elif self._state == PlayerState.PAUSED:
-                self._state = PlayerState.PLAYING
-                self._pause_event.set()
-                result_state = self._state
-            else:
-                result_state = self._state
-        
-        self._emit('on_state_changed', result_state)
-        return result_state
-    
-    def stop(self):
-        current_state = self.state
-        if current_state in [PlayerState.PLAYING, PlayerState.PAUSED]:
-            self._stop_flag = True
-            self._pause_event.set()
-            self.state = PlayerState.STOPPED
-            self._emit('on_state_changed', self.state)
-    
-    def stop_and_wait(self, timeout: float = 2.0) -> bool:
-        current_state = self.state
-        if current_state in [PlayerState.PLAYING, PlayerState.PAUSED]:
-            self._stop_flag = True
-            self._pause_event.set()
-            
-            if self._thread and self._thread.is_alive():
-                self._thread.join(timeout=timeout)
-                if self._thread.is_alive():
-                    return False
-            
-            self.state = PlayerState.IDLE
-            self._restore_window_after_run()
-        return True
-    
-    def _interruptible_sleep(self, seconds: float):
-        end_time = time.time() + seconds
-        while time.time() < end_time:
-            if self._stop_flag:
-                return
-            sleep_time = min(0.05, end_time - time.time())
-            if sleep_time > 0:
-                time.sleep(sleep_time)
-    
-    @property
-    def tab_key(self) -> str:
-        return self._tab_key
-    
-    def _run(self):
-        completed_actions = 0
-        repeat_count = 0
-        
-        while True:
-            if self._stop_flag:
-                self.state = PlayerState.IDLE
-                self._emit('on_state_changed', self.state)
-                self._emit('on_finished', False)
-                return
-            
-            if self.timeout_seconds > 0:
-                elapsed = time.time() - self._start_time
-                if elapsed >= self.timeout_seconds:
-                    self.state = PlayerState.IDLE
-                    self._emit('on_state_changed', self.state)
-                    self._emit('on_finished', False)
-                    return
-            
-            if not self.infinite_loop and repeat_count >= self.repeat_count:
-                break
-            
-            self.current_repeat = repeat_count
-            self._emit('on_repeat_changed', repeat_count + 1)
-            
-            for i, action in enumerate(self.actions):
-                if self._stop_flag:
-                    self.state = PlayerState.IDLE
-                    self._emit('on_state_changed', self.state)
-                    self._emit('on_finished', False)
-                    return
-                
-                if self.timeout_seconds > 0:
-                    elapsed = time.time() - self._start_time
-                    if elapsed >= self.timeout_seconds:
-                        self.state = PlayerState.IDLE
-                        self._emit('on_state_changed', self.state)
-                        self._emit('on_finished', False)
-                        return
-                
-                self._pause_event.wait()
-                
-                if self._stop_flag:
-                    self.state = PlayerState.IDLE
-                    self._emit('on_state_changed', self.state)
-                    self._emit('on_finished', False)
-                    return
-                
-                self.current_index = i
-                
-                if not action.check_condition():
-                    print(f"[条件跳过] {action.description} - 条件不满足: {action.condition}")
-                    completed_actions += 1
-                    self._emit('on_progress', -1, i, repeat_count)
-                    continue
-                
-                is_valid, window_error = self._validate_window_before_action(action)
-                if not is_valid:
-                    self._emit('on_window_error', action, i, window_error)
-                    self.state = PlayerState.IDLE
-                    self._emit('on_state_changed', self.state)
-                    self._emit('on_finished', False)
-                    return
-                
-                current_offset, offset_error = self._get_realtime_window_offset()
-                if offset_error:
-                    self._emit('on_window_error', action, i, offset_error)
-                    self.state = PlayerState.IDLE
-                    self._emit('on_state_changed', self.state)
-                    self._emit('on_finished', False)
-                    return
-                
-                if current_offset is None:
-                    current_offset = self._window_offset
-                
-                self._activate_window_before_action(action)
-                
-                adjusted_delay_before = action.delay_before / self.speed if self.speed > 0 else action.delay_before
-                adjusted_delay_after = action.delay_after / self.speed if self.speed > 0 else action.delay_after
-                
-                if adjusted_delay_before > 0:
-                    self._interruptible_sleep(adjusted_delay_before)
-                
-                if self._stop_flag:
-                    self.state = PlayerState.IDLE
-                    self._emit('on_state_changed', self.state)
-                    self._emit('on_finished', False)
-                    return
-                
-                self._emit('on_action_start', action, i)
-                
-                sub_indices_stack = []
-                
-                def on_sub_action_start(sub_action, sub_index):
-                    sub_indices_stack.append(sub_index)
-                    indices = sub_indices_stack.copy()
-                    self._emit('on_sub_action_start', action, i, sub_action, sub_index, indices)
-                
-                def on_sub_action_end(sub_action, sub_index, success):
-                    indices = sub_indices_stack.copy()
-                    self._emit('on_sub_action_end', action, i, sub_action, sub_index, indices, success)
-                    if sub_indices_stack:
-                        sub_indices_stack.pop()
-                
-                def on_nested_sub_action_start(parent_index, nested_action, nested_index):
-                    sub_indices_stack.append(nested_index)
-                    indices = sub_indices_stack.copy()
-                    self._emit('on_sub_action_start', action, i, nested_action, nested_index, indices)
-                
-                def on_nested_sub_action_end(parent_index, nested_action, nested_index, success):
-                    indices = sub_indices_stack.copy()
-                    self._emit('on_sub_action_end', action, i, nested_action, nested_index, indices, success)
-                    if sub_indices_stack:
-                        sub_indices_stack.pop()
-                
-                action._on_sub_action_start = on_sub_action_start
-                action._on_sub_action_end = on_sub_action_end
-                action._on_nested_sub_action_start = on_nested_sub_action_start
-                action._on_nested_sub_action_end = on_nested_sub_action_end
-                
-                if self._window_title:
-                    if not action.window_title:
-                        action.window_title = self._window_title
-                    if action.background_mode and not action.window_title:
-                        action.window_title = self._window_title
-                if self._window_hwnd:
-                    action._runtime_window_hwnd = self._window_hwnd
-                action._runtime_speed = self.speed
-                
-                try:
-                    success = action.execute(window_offset=current_offset, should_stop=lambda: self._stop_flag, local_group_manager=self._local_group_manager)
-                    self._emit('on_action_end', action, i, success)
-                except Exception as e:
-                    self._emit('on_error', action, i, str(e))
-                    self._emit('on_action_end', action, i, False)
-                finally:
-                    if hasattr(action, '_on_sub_action_start'):
-                        delattr(action, '_on_sub_action_start')
-                    if hasattr(action, '_on_sub_action_end'):
-                        delattr(action, '_on_sub_action_end')
-                    if hasattr(action, '_on_nested_sub_action_start'):
-                        delattr(action, '_on_nested_sub_action_start')
-                    if hasattr(action, '_on_nested_sub_action_end'):
-                        delattr(action, '_on_nested_sub_action_end')
-                    if hasattr(action, '_runtime_window_hwnd'):
-                        delattr(action, '_runtime_window_hwnd')
-                    if hasattr(action, '_runtime_speed'):
-                        delattr(action, '_runtime_speed')
-                
-                completed_actions += 1
-                self._emit('on_progress', -1, i, repeat_count)
-                
-                if adjusted_delay_after > 0:
-                    self._interruptible_sleep(adjusted_delay_after)
-            
-            repeat_count += 1
-        
-        self.state = PlayerState.IDLE
-        self._emit('on_state_changed', self.state)
-        self._emit('on_finished', True)
-    
-    def get_state(self) -> PlayerState:
-        return self.state
-    
-    def get_progress(self) -> Tuple[int, int, int]:
-        return self.current_index, len(self.actions), self.current_repeat
-    
-    def is_playing(self) -> bool:
-        return self.state == PlayerState.PLAYING
-    
-    def is_paused(self) -> bool:
-        return self.state == PlayerState.PAUSED
-    
-    def execute_single_action(self, index: int, window_offset: Optional[Tuple[int, int]] = None) -> bool:
-        if index < 0 or index >= len(self.actions):
-            return False
-
-        action = self.actions[index]
-
-        # 单步调试作为一次独立的“迷你运行”：进入 PLAYING 状态、复位停止标志与暂停事件，
-        # 让右上角的暂停/停止按钮可用；结束时回到 IDLE 并 emit on_finished，
-        # 由 GUI 的状态回调自动把界面恢复为原来的样子。
-        self._stop_flag = False
-        self._pause_event.set()
-        self.current_index = index
-        self.current_repeat = 0
-        self.state = PlayerState.PLAYING
-        self._emit('on_state_changed', self.state)
-
-        success = False
-        try:
-            if self._window_hwnd:
-                action._runtime_window_hwnd = self._window_hwnd
-            action._runtime_speed = self.speed
-            is_valid, window_error = self._validate_window_before_action(action)
-            if not is_valid:
-                self._emit('on_window_error', action, index, window_error)
-                return False
-
-            current_offset, offset_error = self._get_realtime_window_offset()
-            if offset_error:
-                self._emit('on_window_error', action, index, offset_error)
-                return False
-
-            if current_offset is None:
-                current_offset = window_offset or self._window_offset
-
-            self._activate_window_before_action(action)
-
-            adjusted_delay_before = action.delay_before / self.speed if self.speed > 0 else action.delay_before
-            adjusted_delay_after = action.delay_after / self.speed if self.speed > 0 else action.delay_after
-
-            if adjusted_delay_before > 0:
-                self._interruptible_sleep(adjusted_delay_before)
-
-            self._pause_event.wait()
-            if self._stop_flag:
-                return False
-
-            self._emit('on_action_start', action, index)
-
-            try:
-                success = action.execute(window_offset=current_offset, should_stop=lambda: self._stop_flag, local_group_manager=self._local_group_manager)
-                self._emit('on_action_end', action, index, success)
-
-                if adjusted_delay_after > 0:
-                    self._interruptible_sleep(adjusted_delay_after)
-            except Exception as e:
-                self._emit('on_error', action, index, str(e))
-                self._emit('on_action_end', action, index, False)
-                success = False
-
-            return success
-        finally:
-            if hasattr(action, '_runtime_window_hwnd'):
-                delattr(action, '_runtime_window_hwnd')
-            if hasattr(action, '_runtime_speed'):
-                delattr(action, '_runtime_speed')
-            self._restore_window_after_run()
-            finished_ok = bool(success) and not self._stop_flag
-            self.state = PlayerState.IDLE
-            self._emit('on_state_changed', self.state)
-            self._emit('on_finished', finished_ok)
+import time
+import threading
+from typing import List, Callable, Optional, Tuple
+from enum import Enum
+from .actions import Action, ActionType
+
+
+class PlayerState(Enum):
+    IDLE = "idle"
+    PLAYING = "playing"
+    PAUSED = "paused"
+    STOPPED = "stopped"
+
+
+class WindowOffsetProvider:
+    def __init__(self, hwnd: int = 0, window_utils=None):
+        self._hwnd = hwnd
+        self._window_utils = window_utils
+        self._last_offset: Optional[Tuple[int, int]] = None
+        self._last_error: Optional[str] = None
+    
+    def set_hwnd(self, hwnd: int):
+        self._hwnd = hwnd
+    
+    def set_window_utils(self, window_utils):
+        self._window_utils = window_utils
+    
+    def get_current_offset(self) -> Tuple[Optional[Tuple[int, int]], Optional[str]]:
+        if not self._hwnd:
+            return None, None
+        
+        if not self._window_utils:
+            return None, "窗口工具不可用"
+        
+        try:
+            window_info = self._window_utils.get_window_by_hwnd(self._hwnd)
+            if not window_info:
+                return None, f"窗口不存在或已关闭 (句柄: {self._hwnd})"
+            
+            # 录制/选窗时使用的是客户区左上角，因此运行时也必须保持同一坐标基准。
+            client_origin = None
+            if hasattr(self._window_utils, 'client_to_screen_coords'):
+                client_origin = self._window_utils.client_to_screen_coords(self._hwnd, 0, 0)
+            
+            self._last_offset = client_origin or (window_info.x, window_info.y)
+            self._last_error = None
+            return self._last_offset, None
+        except Exception as e:
+            self._last_error = str(e)
+            return None, self._last_error
+    
+    def validate_window(self) -> Tuple[bool, str]:
+        if not self._hwnd:
+            return True, ""
+        
+        if not self._window_utils:
+            return True, ""
+        
+        try:
+            window_info = self._window_utils.get_window_by_hwnd(self._hwnd)
+            if not window_info:
+                return False, f"窗口不存在或已关闭 (句柄: {self._hwnd})"
+            return True, ""
+        except Exception as e:
+            return False, str(e)
+
+
+class Player:
+    def __init__(self, tab_key: str = "", local_group_manager=None):
+        self._tab_key = tab_key
+        self._state = PlayerState.IDLE
+        self._state_lock = threading.Lock()
+        self.actions: List[Action] = []
+        self.current_index: int = 0
+        self.speed: float = 1.0
+        self.repeat_count: int = 1
+        self.current_repeat: int = 0
+        self.infinite_loop: bool = False
+        self.timeout_seconds: float = 0
+        self._local_group_manager = local_group_manager
+        
+        self._thread: Optional[threading.Thread] = None
+        self._pause_event = threading.Event()
+        self._stop_flag = False
+        self._window_offset: Optional[Tuple[int, int]] = None
+        self._window_title: str = ""
+        self._start_time: float = 0
+        
+        self._window_offset_provider: Optional[WindowOffsetProvider] = None
+        self._window_hwnd: int = 0
+        self._window_utils = None
+        self._window_run_mode: str = "normal"
+        self._window_restore_state = None
+        self._window_taskbar_restore_state = None
+        
+        self._callbacks = {
+            'on_action_start': [],
+            'on_action_end': [],
+            'on_state_changed': [],
+            'on_progress': [],
+            'on_error': [],
+            'on_finished': [],
+            'on_repeat_changed': [],
+            'on_window_error': [],
+            'on_window_launching': [],
+            'on_window_found': [],
+            'on_window_not_found': [],
+            'on_sub_action_start': [],
+            'on_sub_action_end': []
+        }
+    
+    def set_local_group_manager(self, manager):
+        self._local_group_manager = manager
+    
+    def get_local_group_manager(self):
+        return self._local_group_manager
+    
+    @property
+    def state(self) -> PlayerState:
+        with self._state_lock:
+            return self._state
+    
+    @state.setter
+    def state(self, value: PlayerState):
+        with self._state_lock:
+            self._state = value
+    
+    def add_callback(self, event: str, callback: Callable):
+        if event in self._callbacks:
+            self._callbacks[event].append(callback)
+    
+    def remove_callback(self, event: str, callback: Callable):
+        if event in self._callbacks and callback in self._callbacks[event]:
+            self._callbacks[event].remove(callback)
+    
+    def _emit(self, event: str, *args, **kwargs):
+        for callback in self._callbacks.get(event, []):
+            try:
+                callback(*args, **kwargs)
+            except Exception as e:
+                print(f"Callback error: {e}")
+    
+    def set_actions(self, actions: List[Action]):
+        if self.state != PlayerState.IDLE:
+            return
+        self.actions = actions.copy()
+    
+    def set_speed(self, speed: float):
+        self.speed = max(0.1, min(10.0, speed))
+    
+    def set_repeat_count(self, count: int):
+        self.repeat_count = max(1, count)
+    
+    def set_infinite_loop(self, enabled: bool):
+        self.infinite_loop = enabled
+    
+    def set_timeout(self, seconds: float):
+        self.timeout_seconds = max(0, seconds)
+    
+    def set_window_offset(self, offset: Optional[Tuple[int, int]]):
+        self._window_offset = offset
+    
+    def set_window_title(self, title: str):
+        self._window_title = title
+    
+    def set_window_hwnd(self, hwnd: int, window_utils=None):
+        self._window_hwnd = hwnd
+        self._window_utils = window_utils
+        
+        if hwnd and window_utils:
+            if not self._window_offset_provider:
+                self._window_offset_provider = WindowOffsetProvider(hwnd, window_utils)
+            else:
+                self._window_offset_provider.set_hwnd(hwnd)
+                self._window_offset_provider.set_window_utils(window_utils)
+        else:
+            self._window_offset_provider = None
+
+    def set_window_run_mode(self, mode: str):
+        allowed_modes = ("normal", "offscreen", "hidden_taskbar", "offscreen_hidden_taskbar")
+        self._window_run_mode = mode if mode in allowed_modes else "normal"
+
+    def _prepare_window_for_run(self) -> Tuple[bool, str]:
+        if self._window_run_mode == "normal":
+            return True, ""
+
+        if self._window_run_mode == "hidden_taskbar":
+            if not self._window_hwnd or not self._window_utils:
+                return False, "后台窗口运行失败: 未绑定目标窗口"
+            taskbar_state = self._window_utils.set_window_taskbar_visibility(self._window_hwnd, visible=False)
+            if not taskbar_state:
+                return False, "后台窗口运行失败: 无法隐藏任务栏图标"
+            self._window_taskbar_restore_state = taskbar_state
+            return True, ""
+
+        if self._window_run_mode == "offscreen_hidden_taskbar":
+            if not self._window_hwnd or not self._window_utils:
+                return False, "后台窗口运行失败: 未绑定目标窗口"
+            taskbar_state = self._window_utils.set_window_taskbar_visibility(self._window_hwnd, visible=False)
+            if not taskbar_state:
+                return False, "后台窗口运行失败: 无法隐藏任务栏图标"
+            self._window_taskbar_restore_state = taskbar_state
+            placement = self._window_utils.move_window_offscreen(self._window_hwnd)
+            if not placement:
+                self._window_utils.restore_window_taskbar_visibility(
+                    self._window_hwnd,
+                    self._window_taskbar_restore_state,
+                )
+                self._window_taskbar_restore_state = None
+                return False, "后台窗口运行失败: 无法移动目标窗口"
+            self._window_restore_state = placement
+            return True, ""
+
+        if not self._window_hwnd or not self._window_utils:
+            return False, "离屏后台运行失败: 未绑定目标窗口"
+
+        placement = self._window_utils.move_window_offscreen(self._window_hwnd)
+        if not placement:
+            return False, "离屏后台运行失败: 无法移动目标窗口"
+
+        self._window_restore_state = placement
+        return True, ""
+
+    def _restore_window_after_run(self):
+        if self._window_restore_state and self._window_hwnd and self._window_utils:
+            try:
+                self._window_utils.restore_window_placement(self._window_hwnd, self._window_restore_state)
+            except Exception:
+                pass
+        self._window_restore_state = None
+        if self._window_taskbar_restore_state and self._window_hwnd and self._window_utils:
+            try:
+                self._window_utils.restore_window_taskbar_visibility(
+                    self._window_hwnd,
+                    self._window_taskbar_restore_state,
+                )
+            except Exception:
+                pass
+        self._window_taskbar_restore_state = None
+    
+    def _get_realtime_window_offset(self) -> Tuple[Optional[Tuple[int, int]], Optional[str]]:
+        if not self._window_offset_provider:
+            return self._window_offset, None
+        
+        offset, error = self._window_offset_provider.get_current_offset()
+        if error:
+            return None, error
+        
+        return offset, None
+    
+    def _validate_window_before_action(self, action: Action) -> Tuple[bool, Optional[str]]:
+        if not self._window_offset_provider:
+            return True, None
+        
+        needs_window = action.action_type in [
+            ActionType.MOUSE_CLICK_RELATIVE,
+            ActionType.MOUSE_MOVE_RELATIVE,
+            ActionType.MOUSE_DRAG,
+        ]
+        
+        if action.use_relative_coords:
+            needs_window = True
+        
+        if not needs_window:
+            return True, None
+        
+        is_valid, error = self._window_offset_provider.validate_window()
+        if not is_valid:
+            return False, error
+        
+        return True, None
+    
+    def _activate_window_before_action(self, action: Action):
+        if not self._window_hwnd or not self._window_utils:
+            return
+
+        if action.background_mode or self._window_run_mode in ("offscreen", "offscreen_hidden_taskbar"):
+            return
+        
+        needs_window = action.action_type in [
+            ActionType.MOUSE_CLICK_RELATIVE,
+            ActionType.MOUSE_MOVE_RELATIVE,
+            ActionType.MOUSE_DRAG,
+        ]
+        
+        if action.use_relative_coords:
+            needs_window = True
+        
+        if not needs_window:
+            return
+        
+        try:
+            self._window_utils.activate_window(self._window_hwnd)
+            time.sleep(0.05)
+        except Exception as e:
+            print(f"[激活窗口失败] {e}")
+    
+    def play(self):
+        if self.state == PlayerState.PLAYING:
+            return
+        
+        if not self.actions:
+            return
+        
+        if self.state == PlayerState.PAUSED:
+            self.state = PlayerState.PLAYING
+            self._pause_event.set()
+            self._emit('on_state_changed', self.state)
+            return
+        
+        success, error_msg = self._ensure_target_window_exists()
+        if not success:
+            if error_msg and error_msg.startswith("window_not_found:"):
+                window_title = error_msg[len("window_not_found:"):]
+                self._emit('on_window_not_found', window_title)
+            else:
+                self._emit('on_window_error', None, -1, error_msg)
+            self.state = PlayerState.IDLE
+            self._emit('on_state_changed', self.state)
+            self._emit('on_finished', False)
+            return
+
+        success, error_msg = self._prepare_window_for_run()
+        if not success:
+            self._emit('on_window_error', None, -1, error_msg)
+            self.state = PlayerState.IDLE
+            self._emit('on_state_changed', self.state)
+            self._emit('on_finished', False)
+            return
+        
+        self.state = PlayerState.PLAYING
+        self.current_index = 0
+        self.current_repeat = 0
+        self._stop_flag = False
+        self._pause_event.set()
+        self._start_time = time.time()
+        
+        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._thread.start()
+        
+        self._emit('on_state_changed', self.state)
+    
+    def _ensure_target_window_exists(self) -> Tuple[bool, str]:
+        if not self._window_title:
+            return True, ""
+        
+        try:
+            import win32gui
+            
+            def find_window_by_title(title_pattern: str) -> Optional[int]:
+                windows_found = []
+                
+                def enum_callback(hwnd, _):
+                    if win32gui.IsWindowVisible(hwnd):
+                        title = win32gui.GetWindowText(hwnd)
+                        if title_pattern.lower() in title.lower():
+                            windows_found.append(hwnd)
+                    return True
+                
+                win32gui.EnumWindows(enum_callback, None)
+                return windows_found[0] if windows_found else None
+            
+            existing_hwnd = find_window_by_title(self._window_title)
+            if existing_hwnd:
+                return True, ""
+            
+            from core.command_manager import CommandManager
+            cmd_manager = CommandManager.get_instance()
+            commands = cmd_manager.get_all_commands()
+            
+            matched_cmd = None
+            for cmd in commands:
+                if cmd.window_title_pattern and cmd.window_title_pattern.lower() in self._window_title.lower():
+                    matched_cmd = cmd
+                    break
+                if cmd.name.lower() in self._window_title.lower():
+                    matched_cmd = cmd
+                    break
+            
+            if matched_cmd:
+                self._emit('on_window_launching', matched_cmd.name)
+                
+                success, message, already_running = cmd_manager.check_and_launch(matched_cmd.id)
+                if not success:
+                    return False, f"启动命令执行失败: {message}"
+                
+                max_wait = 30
+                wait_interval = 0.5
+                waited = 0
+                
+                while waited < max_wait:
+                    if self._stop_flag:
+                        return False, "用户取消"
+                    
+                    hwnd = find_window_by_title(self._window_title)
+                    if hwnd:
+                        self._emit('on_window_found', self._window_title)
+                        return True, ""
+                    
+                    time.sleep(wait_interval)
+                    waited += wait_interval
+                
+                return False, f"等待窗口超时: 已执行启动命令 '{matched_cmd.name}'，但窗口 '{self._window_title}' 未在 {max_wait} 秒内出现"
+            else:
+                return False, f"window_not_found:{self._window_title}"
+                
+        except Exception as e:
+            return False, f"窗口检查失败: {str(e)}"
+    
+    def pause(self):
+        if self.state == PlayerState.PLAYING:
+            self.state = PlayerState.PAUSED
+            self._pause_event.clear()
+            self._emit('on_state_changed', self.state)
+    
+    def resume(self):
+        if self.state == PlayerState.PAUSED:
+            self.state = PlayerState.PLAYING
+            self._pause_event.set()
+            self._emit('on_state_changed', self.state)
+    
+    def toggle_pause(self) -> PlayerState:
+        with self._state_lock:
+            if self._state == PlayerState.PLAYING:
+                self._state = PlayerState.PAUSED
+                self._pause_event.clear()
+                result_state = self._state
+            elif self._state == PlayerState.PAUSED:
+                self._state = PlayerState.PLAYING
+                self._pause_event.set()
+                result_state = self._state
+            else:
+                result_state = self._state
+        
+        self._emit('on_state_changed', result_state)
+        return result_state
+    
+    def stop(self):
+        current_state = self.state
+        if current_state in [PlayerState.PLAYING, PlayerState.PAUSED]:
+            self._stop_flag = True
+            self._pause_event.set()
+            self.state = PlayerState.STOPPED
+            self._emit('on_state_changed', self.state)
+    
+    def stop_and_wait(self, timeout: float = 2.0) -> bool:
+        current_state = self.state
+        if current_state in [PlayerState.PLAYING, PlayerState.PAUSED]:
+            self._stop_flag = True
+            self._pause_event.set()
+            
+            if self._thread and self._thread.is_alive():
+                self._thread.join(timeout=timeout)
+                if self._thread.is_alive():
+                    return False
+            
+            self.state = PlayerState.IDLE
+            self._restore_window_after_run()
+        return True
+    
+    def _interruptible_sleep(self, seconds: float):
+        end_time = time.time() + seconds
+        while time.time() < end_time:
+            if self._stop_flag:
+                return
+            sleep_time = min(0.05, end_time - time.time())
+            if sleep_time > 0:
+                time.sleep(sleep_time)
+    
+    @property
+    def tab_key(self) -> str:
+        return self._tab_key
+    
+    def _run(self):
+        completed_actions = 0
+        repeat_count = 0
+        
+        while True:
+            if self._stop_flag:
+                self.state = PlayerState.IDLE
+                self._emit('on_state_changed', self.state)
+                self._emit('on_finished', False)
+                return
+            
+            if self.timeout_seconds > 0:
+                elapsed = time.time() - self._start_time
+                if elapsed >= self.timeout_seconds:
+                    self.state = PlayerState.IDLE
+                    self._emit('on_state_changed', self.state)
+                    self._emit('on_finished', False)
+                    return
+            
+            if not self.infinite_loop and repeat_count >= self.repeat_count:
+                break
+            
+            self.current_repeat = repeat_count
+            self._emit('on_repeat_changed', repeat_count + 1)
+            
+            for i, action in enumerate(self.actions):
+                if self._stop_flag:
+                    self.state = PlayerState.IDLE
+                    self._emit('on_state_changed', self.state)
+                    self._emit('on_finished', False)
+                    return
+                
+                if self.timeout_seconds > 0:
+                    elapsed = time.time() - self._start_time
+                    if elapsed >= self.timeout_seconds:
+                        self.state = PlayerState.IDLE
+                        self._emit('on_state_changed', self.state)
+                        self._emit('on_finished', False)
+                        return
+                
+                self._pause_event.wait()
+                
+                if self._stop_flag:
+                    self.state = PlayerState.IDLE
+                    self._emit('on_state_changed', self.state)
+                    self._emit('on_finished', False)
+                    return
+                
+                self.current_index = i
+                
+                if not action.check_condition():
+                    print(f"[条件跳过] {action.description} - 条件不满足: {action.condition}")
+                    completed_actions += 1
+                    self._emit('on_progress', -1, i, repeat_count)
+                    continue
+                
+                is_valid, window_error = self._validate_window_before_action(action)
+                if not is_valid:
+                    self._emit('on_window_error', action, i, window_error)
+                    self.state = PlayerState.IDLE
+                    self._emit('on_state_changed', self.state)
+                    self._emit('on_finished', False)
+                    return
+                
+                current_offset, offset_error = self._get_realtime_window_offset()
+                if offset_error:
+                    self._emit('on_window_error', action, i, offset_error)
+                    self.state = PlayerState.IDLE
+                    self._emit('on_state_changed', self.state)
+                    self._emit('on_finished', False)
+                    return
+                
+                if current_offset is None:
+                    current_offset = self._window_offset
+                
+                self._activate_window_before_action(action)
+                
+                adjusted_delay_before = action.delay_before / self.speed if self.speed > 0 else action.delay_before
+                adjusted_delay_after = action.delay_after / self.speed if self.speed > 0 else action.delay_after
+                
+                if adjusted_delay_before > 0:
+                    self._interruptible_sleep(adjusted_delay_before)
+                
+                if self._stop_flag:
+                    self.state = PlayerState.IDLE
+                    self._emit('on_state_changed', self.state)
+                    self._emit('on_finished', False)
+                    return
+                
+                self._emit('on_action_start', action, i)
+                
+                sub_indices_stack = []
+                
+                def on_sub_action_start(sub_action, sub_index):
+                    sub_indices_stack.append(sub_index)
+                    indices = sub_indices_stack.copy()
+                    self._emit('on_sub_action_start', action, i, sub_action, sub_index, indices)
+                
+                def on_sub_action_end(sub_action, sub_index, success):
+                    indices = sub_indices_stack.copy()
+                    self._emit('on_sub_action_end', action, i, sub_action, sub_index, indices, success)
+                    if sub_indices_stack:
+                        sub_indices_stack.pop()
+                
+                def on_nested_sub_action_start(parent_index, nested_action, nested_index):
+                    sub_indices_stack.append(nested_index)
+                    indices = sub_indices_stack.copy()
+                    self._emit('on_sub_action_start', action, i, nested_action, nested_index, indices)
+                
+                def on_nested_sub_action_end(parent_index, nested_action, nested_index, success):
+                    indices = sub_indices_stack.copy()
+                    self._emit('on_sub_action_end', action, i, nested_action, nested_index, indices, success)
+                    if sub_indices_stack:
+                        sub_indices_stack.pop()
+                
+                action._on_sub_action_start = on_sub_action_start
+                action._on_sub_action_end = on_sub_action_end
+                action._on_nested_sub_action_start = on_nested_sub_action_start
+                action._on_nested_sub_action_end = on_nested_sub_action_end
+                
+                if self._window_title:
+                    if not action.window_title:
+                        action.window_title = self._window_title
+                    if action.background_mode and not action.window_title:
+                        action.window_title = self._window_title
+                if self._window_hwnd:
+                    action._runtime_window_hwnd = self._window_hwnd
+                action._runtime_speed = self.speed
+                
+                try:
+                    success = action.execute(window_offset=current_offset, should_stop=lambda: self._stop_flag, local_group_manager=self._local_group_manager)
+                    self._emit('on_action_end', action, i, success)
+                except Exception as e:
+                    self._emit('on_error', action, i, str(e))
+                    self._emit('on_action_end', action, i, False)
+                finally:
+                    if hasattr(action, '_on_sub_action_start'):
+                        delattr(action, '_on_sub_action_start')
+                    if hasattr(action, '_on_sub_action_end'):
+                        delattr(action, '_on_sub_action_end')
+                    if hasattr(action, '_on_nested_sub_action_start'):
+                        delattr(action, '_on_nested_sub_action_start')
+                    if hasattr(action, '_on_nested_sub_action_end'):
+                        delattr(action, '_on_nested_sub_action_end')
+                    if hasattr(action, '_runtime_window_hwnd'):
+                        delattr(action, '_runtime_window_hwnd')
+                    if hasattr(action, '_runtime_speed'):
+                        delattr(action, '_runtime_speed')
+                
+                completed_actions += 1
+                self._emit('on_progress', -1, i, repeat_count)
+                
+                if adjusted_delay_after > 0:
+                    self._interruptible_sleep(adjusted_delay_after)
+            
+            repeat_count += 1
+        
+        self.state = PlayerState.IDLE
+        self._emit('on_state_changed', self.state)
+        self._emit('on_finished', True)
+    
+    def get_state(self) -> PlayerState:
+        return self.state
+    
+    def get_progress(self) -> Tuple[int, int, int]:
+        return self.current_index, len(self.actions), self.current_repeat
+    
+    def is_playing(self) -> bool:
+        return self.state == PlayerState.PLAYING
+    
+    def is_paused(self) -> bool:
+        return self.state == PlayerState.PAUSED
+    
+    def execute_single_action(self, index: int, window_offset: Optional[Tuple[int, int]] = None) -> bool:
+        if index < 0 or index >= len(self.actions):
+            return False
+
+        action = self.actions[index]
+
+        # 单步调试作为一次独立的“迷你运行”：进入 PLAYING 状态、复位停止标志与暂停事件，
+        # 让右上角的暂停/停止按钮可用；结束时回到 IDLE 并 emit on_finished，
+        # 由 GUI 的状态回调自动把界面恢复为原来的样子。
+        self._stop_flag = False
+        self._pause_event.set()
+        self.current_index = index
+        self.current_repeat = 0
+        self.state = PlayerState.PLAYING
+        self._emit('on_state_changed', self.state)
+
+        success = False
+        try:
+            if self._window_hwnd:
+                action._runtime_window_hwnd = self._window_hwnd
+            action._runtime_speed = self.speed
+            is_valid, window_error = self._validate_window_before_action(action)
+            if not is_valid:
+                self._emit('on_window_error', action, index, window_error)
+                return False
+
+            current_offset, offset_error = self._get_realtime_window_offset()
+            if offset_error:
+                self._emit('on_window_error', action, index, offset_error)
+                return False
+
+            if current_offset is None:
+                current_offset = window_offset or self._window_offset
+
+            self._activate_window_before_action(action)
+
+            adjusted_delay_before = action.delay_before / self.speed if self.speed > 0 else action.delay_before
+            adjusted_delay_after = action.delay_after / self.speed if self.speed > 0 else action.delay_after
+
+            if adjusted_delay_before > 0:
+                self._interruptible_sleep(adjusted_delay_before)
+
+            self._pause_event.wait()
+            if self._stop_flag:
+                return False
+
+            self._emit('on_action_start', action, index)
+
+            try:
+                success = action.execute(window_offset=current_offset, should_stop=lambda: self._stop_flag, local_group_manager=self._local_group_manager)
+                self._emit('on_action_end', action, index, success)
+
+                if adjusted_delay_after > 0:
+                    self._interruptible_sleep(adjusted_delay_after)
+            except Exception as e:
+                self._emit('on_error', action, index, str(e))
+                self._emit('on_action_end', action, index, False)
+                success = False
+
+            return success
+        finally:
+            if hasattr(action, '_runtime_window_hwnd'):
+                delattr(action, '_runtime_window_hwnd')
+            if hasattr(action, '_runtime_speed'):
+                delattr(action, '_runtime_speed')
+            self._restore_window_after_run()
+            finished_ok = bool(success) and not self._stop_flag
+            self.state = PlayerState.IDLE
+            self._emit('on_state_changed', self.state)
+            self._emit('on_finished', finished_ok)

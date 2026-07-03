@@ -166,7 +166,8 @@ class WindowUtils:
             height = max(1, rect[3] - rect[1])
 
             if win32gui.IsIconic(hwnd):
-                win32gui.ShowWindow(hwnd, win32con.SW_RESTORE)
+                # 离屏模式启动时不要把最小化窗口带到前台，否则会在运行开始瞬间抢焦点。
+                win32gui.ShowWindow(hwnd, win32con.SW_SHOWNOACTIVATE)
 
             virtual_left = user32.GetSystemMetrics(76)
             virtual_top = user32.GetSystemMetrics(77)
@@ -297,7 +298,7 @@ class WindowUtils:
                 )
 
             if show_cmd in (win32con.SW_SHOWMINIMIZED, win32con.SW_MINIMIZE, win32con.SW_SHOWMINNOACTIVE):
-                win32gui.ShowWindow(hwnd, win32con.SW_MINIMIZE)
+                win32gui.ShowWindow(hwnd, win32con.SW_SHOWMINNOACTIVE)
             elif show_cmd == win32con.SW_SHOWMAXIMIZED:
                 win32gui.ShowWindow(hwnd, win32con.SW_MAXIMIZE)
             elif show_cmd == win32con.SW_HIDE:
@@ -363,7 +364,6 @@ class WindowUtils:
                 if attached_target:
                     user32.AttachThreadInput(cur_thread, target_thread, False)
 
-            # 触发一次重绘，避免后台窗口首帧空白
             try:
                 win32gui.UpdateWindow(hwnd)
             except Exception:

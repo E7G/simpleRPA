@@ -3,6 +3,7 @@ import os
 import sys
 import tempfile
 import json
+from unittest.mock import Mock
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -163,6 +164,74 @@ class TestPlayer(unittest.TestCase):
         
         result = self.player.toggle_pause()
         self.assertEqual(result, PlayerState.IDLE)
+
+    def test_pause_restores_window_and_resume_prepares_it_again(self):
+        self.player.state = PlayerState.PLAYING
+        self.player._window_prepared = True
+        self.player._window_restore_state = {'rect': (0, 0, 100, 100), 'show_cmd': 1}
+        self.player._window_hwnd = 123
+        self.player._window_utils = Mock()
+        self.player._window_utils.restore_window_placement.return_value = True
+
+        prepared = []
+        self.player._prepare_window_for_run = Mock(side_effect=lambda: prepared.append(True) or (True, ""))
+
+        self.player.pause()
+        self.assertEqual(self.player.state, PlayerState.PAUSED)
+        self.assertFalse(self.player._window_prepared)
+        self.player._window_utils.restore_window_placement.assert_called_once()
+
+        self.player.resume()
+        self.assertEqual(self.player.state, PlayerState.PLAYING)
+        self.assertEqual(len(prepared), 1)
+
+    def test_stop_restores_window_immediately(self):
+        self.player.state = PlayerState.PLAYING
+        self.player._window_prepared = True
+        self.player._window_restore_state = {'rect': (0, 0, 100, 100), 'show_cmd': 1}
+        self.player._window_hwnd = 123
+        self.player._window_utils = Mock()
+        self.player._window_utils.restore_window_placement.return_value = True
+
+        self.player.stop()
+
+        self.assertEqual(self.player.state, PlayerState.STOPPED)
+        self.assertFalse(self.player._window_prepared)
+        self.player._window_utils.restore_window_placement.assert_called_once()
+
+    def test_stop_restores_taskbar_before_window_placement(self):
+        self.player.state = PlayerState.PLAYING
+        self.player._window_prepared = True
+        self.player._window_restore_state = {'rect': (0, 0, 100, 100), 'show_cmd': 1}
+        self.player._window_taskbar_restore_state = {'exstyle': 99}
+        self.player._window_hwnd = 123
+        self.player._window_utils = Mock()
+
+        order = []
+        self.player._window_utils.restore_window_taskbar_visibility.side_effect = lambda *args: order.append('taskbar') or True
+        self.player._window_utils.restore_window_placement.side_effect = lambda *args: order.append('placement') or True
+
+        self.player.stop()
+
+        self.assertEqual(self.player.state, PlayerState.STOPPED)
+        self.assertEqual(order, ['taskbar', 'placement'])
+        self.assertFalse(self.player._window_prepared)
+
+    def test_restore_window_after_run_restores_taskbar_before_placement(self):
+        self.player._window_prepared = True
+        self.player._window_restore_state = {'rect': (0, 0, 100, 100), 'show_cmd': 1}
+        self.player._window_taskbar_restore_state = {'exstyle': 99}
+        self.player._window_hwnd = 123
+        self.player._window_utils = Mock()
+
+        order = []
+        self.player._window_utils.restore_window_taskbar_visibility.side_effect = lambda *args: order.append('taskbar') or True
+        self.player._window_utils.restore_window_placement.side_effect = lambda *args: order.append('placement') or True
+
+        self.player._restore_window_after_run()
+
+        self.assertEqual(order, ['taskbar', 'placement'])
+        self.assertFalse(self.player._window_prepared)
 
 
 class TestConfig(unittest.TestCase):

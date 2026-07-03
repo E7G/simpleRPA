@@ -3,6 +3,7 @@ import os
 import time
 import unittest
 from unittest.mock import patch, MagicMock
+from types import SimpleNamespace
 import tempfile
 import shutil
 
@@ -683,6 +684,86 @@ class TestWindowUtils(unittest.TestCase):
                 rect = utils.get_window_rect(window.hwnd)
                 if rect:
                     self.assertEqual(len(rect), 4)
+
+    def test_move_window_offscreen_restores_without_activation(self):
+        utils = self.WindowUtils()
+        utils._win32_available = True
+
+        fake_user32 = SimpleNamespace(GetSystemMetrics=lambda metric: {
+            76: 0,
+            77: 0,
+            78: 1920,
+            79: 1080,
+        }[metric])
+        fake_win32con = SimpleNamespace(
+            SW_SHOWNOACTIVATE=4,
+            SWP_NOZORDER=0x0004,
+            SWP_NOACTIVATE=0x0010,
+        )
+        calls = []
+        fake_win32gui = SimpleNamespace(
+            IsWindow=lambda hwnd: True,
+            GetWindowRect=lambda hwnd: (10, 20, 210, 120),
+            GetWindowPlacement=lambda hwnd: (0, 2, (0, 0), (0, 0), (10, 20, 210, 120)),
+            IsIconic=lambda hwnd: True,
+            ShowWindow=lambda hwnd, cmd: calls.append(("ShowWindow", hwnd, cmd)),
+            SetWindowPos=lambda hwnd, insert_after, x, y, width, height, flags: calls.append(
+                ("SetWindowPos", hwnd, x, y, width, height, flags)
+            ),
+            UpdateWindow=lambda hwnd: calls.append(("UpdateWindow", hwnd)),
+        )
+
+        with patch('utils.window_utils.user32', fake_user32), patch.dict(
+            sys.modules,
+            {
+                'win32gui': fake_win32gui,
+                'win32con': fake_win32con,
+            },
+        ):
+            state = utils.move_window_offscreen(123)
+
+        self.assertEqual(state, {'rect': (10, 20, 210, 120), 'show_cmd': 2})
+        self.assertIn(("ShowWindow", 123, fake_win32con.SW_SHOWNOACTIVATE), calls)
+
+    def test_restore_window_placement_minimized_without_activation(self):
+        utils = self.WindowUtils()
+        utils._win32_available = True
+
+        fake_win32con = SimpleNamespace(
+            SW_SHOWMINIMIZED=2,
+            SW_MINIMIZE=6,
+            SW_SHOWMINNOACTIVE=7,
+            SW_SHOWMAXIMIZED=3,
+            SW_HIDE=0,
+            SW_SHOWNORMAL=1,
+            SW_MAXIMIZE=3,
+            SW_SHOWNOACTIVATE=4,
+            SWP_NOZORDER=0x0004,
+            SWP_NOACTIVATE=0x0010,
+        )
+        calls = []
+        fake_win32gui = SimpleNamespace(
+            IsWindow=lambda hwnd: True,
+            SetWindowPos=lambda hwnd, insert_after, x, y, width, height, flags: calls.append(
+                ("SetWindowPos", hwnd, x, y, width, height, flags)
+            ),
+            ShowWindow=lambda hwnd, cmd: calls.append(("ShowWindow", hwnd, cmd)),
+        )
+
+        with patch.dict(
+            sys.modules,
+            {
+                'win32gui': fake_win32gui,
+                'win32con': fake_win32con,
+            },
+        ):
+            ok = utils.restore_window_placement(
+                123,
+                {'rect': (10, 20, 210, 120), 'show_cmd': fake_win32con.SW_SHOWMINIMIZED},
+            )
+
+        self.assertTrue(ok)
+        self.assertIn(("ShowWindow", 123, fake_win32con.SW_SHOWMINNOACTIVE), calls)
 
 
 class TestGUIComponents(unittest.TestCase):

@@ -1,0 +1,3 @@
+[submodule "rust-workspace/gui/qfluentkit"]
+	path = rust-workspace/gui/qfluentkit
+	url = https://github.com/toddming/QFluentKit.git

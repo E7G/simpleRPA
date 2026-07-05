@@ -1,0 +1,14 @@
+[package]
+name = "simplerpa-ffi"
+description = "C FFI bridge for SimpleRPA"
+version.workspace = true
+edition.workspace = true
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+simplerpa-core = { path = "../core" }
+simplerpa-winapi = { path = "../winapi" }
+simplerpa-engine = { path = "../engine" }
+serde_json.workspace = true

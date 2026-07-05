@@ -1,0 +1,21 @@
+[package]
+name = "simplerpa-engine"
+description = "RPA execution engine for SimpleRPA"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+simplerpa-core = { path = "../core" }
+simplerpa-winapi = { path = "../winapi" }
+serde.workspace = true
+serde_json.workspace = true
+uuid.workspace = true
+chrono.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = [
+    "Win32_Foundation",
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_UI_Input",
+    "Win32_UI_Input_KeyboardAndMouse",
+] }

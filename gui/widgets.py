@@ -1,15 +1,15 @@
 from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QDialog, QApplication,
-    QLabel, QRubberBand, QListWidgetItem
+    QLabel, QRubberBand, QListWidgetItem, QSizePolicy
 )
 from PyQt5.QtCore import Qt, pyqtSignal, QTimer, QRect, QPoint
 from PyQt5.QtGui import QPixmap, QPainter, QColor, QPen, QFont
-from typing import Optional, Tuple, Dict
+from typing import Callable, Optional, Tuple, Dict
 import sys
 
 from qfluentwidgets import (
     BodyLabel, StrongBodyLabel, PushButton, PrimaryPushButton,
-    SpinBox, DoubleSpinBox, ComboBox, LineEdit
+    SpinBox, DoubleSpinBox, ComboBox, LineEdit, CaptionLabel
 )
 
 from .fluent_theme import muted_caption_style
@@ -44,10 +44,17 @@ def get_physical_cursor_pos(fallback_point=None) -> Tuple[int, int]:
 class CoordinateWidget(QWidget):
     coordinates_changed = pyqtSignal(int, int)
     
-    def __init__(self, parent=None, title: str = "坐标", window_offset: Optional[Tuple[int, int]] = None):
+    def __init__(
+        self,
+        parent=None,
+        title: str = "坐标",
+        window_offset: Optional[Tuple[int, int]] = None,
+        screen_to_coord: Optional[Callable[[int, int], Optional[Tuple[int, int]]]] = None,
+    ):
         super().__init__(parent)
         self._title = title
         self._window_offset = window_offset
+        self._screen_to_coord = screen_to_coord
         self._setup_ui()
     
     def _setup_ui(self):
@@ -90,12 +97,18 @@ class CoordinateWidget(QWidget):
     
     def set_window_offset(self, offset: Optional[Tuple[int, int]]):
         self._window_offset = offset
+
+    def set_screen_to_coord(self, converter: Optional[Callable[[int, int], Optional[Tuple[int, int]]]]):
+        self._screen_to_coord = converter
     
     def _on_value_changed(self):
         self.coordinates_changed.emit(self._x_spin.value(), self._y_spin.value())
     
     def _start_pick(self):
-        self._pick_widget = ScreenPickWidget(window_offset=self._window_offset)
+        self._pick_widget = ScreenPickWidget(
+            window_offset=self._window_offset,
+            screen_to_coord=self._screen_to_coord,
+        )
         self._pick_widget.position_picked.connect(self._on_position_picked)
         self._pick_widget.show()
     
@@ -118,11 +131,17 @@ class CoordinateWidget(QWidget):
 class ScreenPickWidget(QWidget):
     position_picked = pyqtSignal(int, int)
     
-    def __init__(self, parent=None, window_offset: Optional[Tuple[int, int]] = None):
+    def __init__(
+        self,
+        parent=None,
+        window_offset: Optional[Tuple[int, int]] = None,
+        screen_to_coord: Optional[Callable[[int, int], Optional[Tuple[int, int]]]] = None,
+    ):
         super().__init__(parent)
         self._screen_pixmap = None
         self._screen_offset = (0, 0)
         self._window_offset = window_offset
+        self._screen_to_coord = screen_to_coord
         
         self.setWindowFlags(Qt.Window | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
         self.setWindowState(Qt.WindowFullScreen)
@@ -162,7 +181,10 @@ class ScreenPickWidget(QWidget):
             # 避免高 DPI 缩放下 event.globalPos() 的逻辑坐标导致拾取偏移。
             x, y = get_physical_cursor_pos(event.globalPos())
 
-            if self._window_offset:
+            converted = self._screen_to_coord(x, y) if self._screen_to_coord else None
+            if converted:
+                x, y = converted
+            elif self._window_offset:
                 x = x - self._window_offset[0]
                 y = y - self._window_offset[1]
 
@@ -225,11 +247,12 @@ class DragCoordinateWidget(QWidget):
 class WindowSelector(QWidget):
     window_selected = pyqtSignal(object)
     
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, compact=False):
         super().__init__(parent)
         self._selected_window = None
         self._pick_mode = False
         self._listener = None
+        self._compact = compact
         self._setup_ui()
         self._check_win32()
     
@@ -244,26 +267,29 @@ class WindowSelector(QWidget):
             self._win32_available = False
     
     def _setup_ui(self):
-        layout = QHBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(8)
+        if self._compact:
+            layout = QHBoxLayout(self)
+            layout.setContentsMargins(0, 0, 0, 0)
+            layout.setSpacing(6)
+        else:
+            layout = QVBoxLayout(self)
+            layout.setContentsMargins(0, 0, 0, 0)
+            layout.setSpacing(6)
         
         self._window_combo = ComboBox()
         self._window_combo.setMinimumWidth(200)
-        self._window_combo.setMinimumHeight(40)
+        self._window_combo.setMinimumHeight(36)
         self._window_combo.currentIndexChanged.connect(self._on_combo_changed)
         layout.addWidget(self._window_combo)
         
         self._refresh_btn = PushButton("刷新")
-        self._refresh_btn.setMinimumWidth(60)
-        self._refresh_btn.setMinimumHeight(40)
+        self._refresh_btn.setMinimumHeight(32)
         self._refresh_btn.clicked.connect(self.refresh_windows)
         layout.addWidget(self._refresh_btn)
         
         self._pick_btn = PushButton("拾取")
         self._pick_btn.setCheckable(True)
-        self._pick_btn.setMinimumWidth(60)
-        self._pick_btn.setMinimumHeight(40)
+        self._pick_btn.setMinimumHeight(32)
         self._pick_btn.clicked.connect(self._toggle_pick_mode)
         layout.addWidget(self._pick_btn)
     
@@ -416,6 +442,23 @@ class WindowSelector(QWidget):
             return win32gui.GetWindowRect(self._selected_window)
         except Exception:
             return None
+
+    def get_client_match_region(self) -> Optional[Tuple[int, int, int, int]]:
+        if not self._selected_window:
+            return None
+
+        from utils.window_utils import WindowUtils
+        window_utils = WindowUtils()
+        client_rect = window_utils.get_client_rect_screen(self._selected_window)
+        if not client_rect:
+            return None
+
+        left, top, right, bottom = client_rect
+        width = max(0, right - left)
+        height = max(0, bottom - top)
+        if width <= 0 or height <= 0:
+            return None
+        return (left, top, width, height)
     
     def get_window_offset(self) -> Optional[Tuple[int, int]]:
         """
@@ -847,3 +890,175 @@ class CaptureWidget(QWidget):
     def keyPressEvent(self, event):
         if event.key() == Qt.Key_Escape:
             self.close()
+
+
+class WindowPreview(QWidget):
+    """窗口实时预览组件，用于在离屏模式下显示目标窗口状态。"""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._hwnd = None
+        self._pixmap = None
+        self._paused = False
+        self._setup_ui()
+
+    def set_paused(self, paused: bool):
+        self._paused = paused
+
+    def _setup_ui(self):
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+
+        self._label = QLabel()
+        self._label.setAlignment(Qt.AlignCenter)
+        self._label.setMinimumSize(200, 150)
+        self._label.setStyleSheet(
+            "border: 1px solid rgba(128,128,128,0.3);"
+            "background-color: rgba(0,0,0,0.05);"
+        )
+        layout.addWidget(self._label, 1)
+
+        self._info_label = CaptionLabel("")
+        self._info_label.setStyleSheet(muted_caption_style("font-size: 11px;"))
+        layout.addWidget(self._info_label)
+
+    def set_hwnd(self, hwnd):
+        self._hwnd = hwnd
+        if self.isVisible():
+            from PyQt5.QtCore import QTimer
+            QTimer.singleShot(200, self._safe_update)
+
+    def _safe_update(self):
+        try:
+            self.update_preview()
+        except Exception:
+            pass
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        if self._hwnd:
+            from PyQt5.QtCore import QTimer
+            QTimer.singleShot(300, self._safe_update)
+
+    def update_preview(self):
+        if not self._hwnd:
+            self._pixmap = None
+            self._label.clear()
+            self._label.setText("未选择窗口")
+            self._info_label.setText("")
+            return
+
+        label_size = self._label.size()
+        if label_size.width() <= 0 or label_size.height() <= 0:
+            return
+
+        pixmap = self._capture_window()
+        if pixmap and not pixmap.isNull():
+            label_size = self._label.size()
+            if label_size.width() > 0 and label_size.height() > 0:
+                scaled = pixmap.scaled(
+                    label_size,
+                    Qt.KeepAspectRatio,
+                    Qt.SmoothTransformation,
+                )
+                self._pixmap = scaled
+                self._label.setPixmap(scaled)
+                self._info_label.setText(
+                    f"{pixmap.width()}×{pixmap.height()}"
+                )
+            self._pixmap = scaled
+            self._label.setPixmap(scaled)
+            self._info_label.setText(
+                f"{pixmap.width()}×{pixmap.height()}"
+            )
+        else:
+            self._pixmap = None
+            self._label.clear()
+            self._label.setText("无法获取窗口")
+            self._info_label.setText("")
+
+    def _capture_window(self):
+        if not self._hwnd:
+            return None
+        try:
+            import win32gui
+            import win32ui
+            import ctypes
+
+            if not win32gui.IsWindow(self._hwnd):
+                return None
+
+            left, top, right, bottom = win32gui.GetClientRect(self._hwnd)
+            width = right - left
+            height = bottom - top
+            if width <= 0 or height <= 0:
+                return None
+
+            hwnd_dc = win32gui.GetWindowDC(self._hwnd)
+            mfc_dc = win32ui.CreateDCFromHandle(hwnd_dc)
+            save_dc = mfc_dc.CreateCompatibleDC()
+            bitmap = win32ui.CreateBitmap()
+            bitmap.CreateCompatibleBitmap(mfc_dc, width, height)
+            save_dc.SelectObject(bitmap)
+
+            try:
+                user32 = ctypes.windll.user32
+                PW_CLIENTONLY = 1
+                PW_RENDERFULLCONTENT = 2
+                result = 0
+                for flags in (PW_RENDERFULLCONTENT, PW_CLIENTONLY, 0):
+                    try:
+                        result = user32.PrintWindow(
+                            self._hwnd, save_dc.GetSafeHdc(), flags
+                        )
+                    except OSError:
+                        result = 0
+                    if result == 1:
+                        break
+
+                if result != 1:
+                    return None
+
+                bmp_info = bitmap.GetInfo()
+                bmp_bytes = bitmap.GetBitmapBits(True)
+
+                width = bmp_info["bmWidth"]
+                height = bmp_info["bmHeight"]
+
+                from PIL import Image
+                from PyQt5.QtGui import QImage
+                img = Image.frombuffer(
+                    "RGB",
+                    (width, height),
+                    bmp_bytes,
+                    "raw",
+                    "BGRX",
+                    0,
+                    1,
+                )
+                data = img.tobytes("raw", "RGB")
+                bytes_per_line = width * 3
+                qimg = QImage(
+                    data,
+                    width,
+                    height,
+                    bytes_per_line,
+                    QImage.Format_RGB888,
+                )
+                return QPixmap.fromImage(qimg.copy())
+            finally:
+                try:
+                    win32gui.DeleteObject(bitmap.GetHandle())
+                except Exception:
+                    pass
+                try:
+                    save_dc.DeleteDC()
+                except Exception:
+                    pass
+                try:
+                    mfc_dc.DeleteDC()
+                except Exception:
+                    pass
+                win32gui.ReleaseDC(self._hwnd, hwnd_dc)
+        except Exception:
+            return None

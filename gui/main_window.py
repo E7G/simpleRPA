@@ -17,7 +17,7 @@ from qfluentwidgets import (
     TransparentToolButton, CheckBox,
 )
 
-from core.actions import Action, ActionManager, ActionType
+from core.actions import Action, ActionManager, ActionType, can_actions_run_offscreen
 from core.player import Player, PlayerState
 from core.exporter import Exporter
 from core.action_group import LocalActionGroupManager
@@ -66,6 +66,7 @@ class MainWindow(MSFluentWindow):
         # 从而恢复正确的 UI/状态文案，并避免误触发整段运行的完成通知。
         self._single_debug_active = False
         self._single_debug_index = -1
+        self._tray_minimize_notified = False
         
         self._setup_ui()
         self._setup_navigation()
@@ -151,7 +152,7 @@ class MainWindow(MSFluentWindow):
         toolbar = AutomateToolbar(self.homeInterface)
         tb = toolbar._layout
         
-        self._window_selector = WindowSelector()
+        self._window_selector = WindowSelector(compact=True)
         self._window_selector.setMinimumWidth(200)
         self._window_selector.refresh_windows()
         tb.addWidget(self._window_selector)
@@ -168,15 +169,10 @@ class MainWindow(MSFluentWindow):
         )
         tb.addWidget(InlineNumericField("重复", self._repeat_spin))
         
-        self._infinite_cb = CheckBox("无限")
-        self._infinite_cb.stateChanged.connect(self._on_infinite_changed)
-        tb.addWidget(self._infinite_cb)
         
-        self._timeout_spin = create_compact_float_spin(
-            0, 3600, 0, step=1, suffix="s", width=76,
-        )
-        self._timeout_spin.setSpecialValueText("∞")
-        tb.addWidget(InlineNumericField("超时", self._timeout_spin))
+        self._offscreen_cb = CheckBox("离屏后台(隐藏图标)")
+        self._offscreen_cb.setToolTip("把目标窗口移到屏幕外并隐藏任务栏图标，结束后自动恢复")
+        tb.addWidget(self._offscreen_cb)
         
         tb.addStretch()
         
@@ -452,8 +448,8 @@ class MainWindow(MSFluentWindow):
                 self._config.bound_window.get('title', '')
             )
         
-        self._infinite_cb.setChecked(self._config.infinite_loop)
-        self._timeout_spin.setValue(self._config.timeout_seconds)
+        self._offscreen_cb.setChecked(self._config.run_window_offscreen)
+
         
         if self._config.open_tabs:
             self._restore_open_tabs()
@@ -502,8 +498,8 @@ class MainWindow(MSFluentWindow):
                 'title': self._window_selector.get_selected_title()
             }
         
-        self._config.infinite_loop = self._infinite_cb.isChecked()
-        self._config.timeout_seconds = self._timeout_spin.value()
+        self._config.run_window_offscreen = self._offscreen_cb.isChecked()
+
         
         all_tabs = self._script_editor.get_all_tabs()
         all_local_groups = self._script_editor.get_all_local_groups()
@@ -530,10 +526,6 @@ class MainWindow(MSFluentWindow):
             if self._config.minimize_to_tray:
                 event.ignore()
                 self.hide()
-                self._tray_service.show_message(
-                    "SimpleRPA 仍在运行",
-                    "已最小化到系统托盘，定时任务将在后台继续。右键托盘图标可退出。"
-                )
                 return
 
         has_unsaved = any(self._tab_modified.values())
@@ -855,8 +847,6 @@ class MainWindow(MSFluentWindow):
         player.set_actions(actions)
         player.set_speed(self._speed_spin.value())
         player.set_repeat_count(self._repeat_spin.value())
-        player.set_infinite_loop(self._infinite_cb.isChecked())
-        player.set_timeout(self._timeout_spin.value())
         
         window_offset = self._window_selector.get_window_offset()
         player.set_window_offset(window_offset)
@@ -864,8 +854,19 @@ class MainWindow(MSFluentWindow):
         
         window_title = self._window_selector.get_selected_title()
         player.set_window_title(window_title)
-        
-        if selected_hwnd:
+
+        offscreen_requested = bool(selected_hwnd and self._offscreen_cb.isChecked())
+        offscreen_supported = can_actions_run_offscreen(actions, local_group_manager=player.get_local_group_manager()) if offscreen_requested else False
+        offscreen_enabled = offscreen_requested
+        if offscreen_enabled:
+            run_mode = "offscreen_hidden_taskbar"
+        else:
+            run_mode = "normal"
+        player.set_window_run_mode(run_mode)
+        if offscreen_requested and not offscreen_supported:
+            self._status_label.setText("已强制启用离屏后台；当前脚本可能含前台动作，若失败请改成后台模式。")
+
+        if selected_hwnd and not offscreen_enabled:
             self._window_utils.activate_window(selected_hwnd)
         
         for action in actions:
@@ -885,18 +886,9 @@ class MainWindow(MSFluentWindow):
         
         total_actions = len(actions)
         repeat_count = player.repeat_count
-        if player.infinite_loop:
-            self._status_label.setText(f"开始执行 {total_actions} 个动作 (无限循环)...")
-        else:
-            self._status_label.setText(f"开始执行 {total_actions} 个动作，共 {repeat_count} 轮...")
+        self._status_label.setText(f"开始执行 {total_actions} 个动作，共 {repeat_count} 轮...")
         
         player.play()
-    
-    def _on_infinite_changed(self, state):
-        is_infinite = state == Qt.Checked
-        self._repeat_spin.setEnabled(not is_infinite)
-        if is_infinite:
-            self._status_label.setText("无限循环模式")
     
     def _pause_script(self):
         current_tab = self._script_editor._get_current_tab()
@@ -923,10 +915,7 @@ class MainWindow(MSFluentWindow):
         elif new_state == PlayerState.PLAYING:
             self._pause_btn.setText("暂停")
             total_actions = len(player.actions)
-            if player.infinite_loop:
-                self._status_label.setText(f"继续执行 | 第 {player.current_repeat} 轮 | 动作 {player.current_index + 1}/{total_actions}")
-            else:
-                self._status_label.setText(f"继续执行 | 第 {player.current_repeat}/{player.repeat_count} 轮 | 动作 {player.current_index + 1}/{total_actions}")
+            self._status_label.setText(f"继续执行 | 第 {player.current_repeat}/{player.repeat_count} 轮 | 动作 {player.current_index + 1}/{total_actions}")
     
     def _stop_script(self):
         current_tab = self._script_editor._get_current_tab()
@@ -1049,7 +1038,18 @@ class MainWindow(MSFluentWindow):
             if target_action.action_type in [ActionType.ACTION_GROUP_REF, ActionType.IMAGE_CLICK, ActionType.IMAGE_WAIT_CLICK, ActionType.IMAGE_CHECK]:
                 target_action.window_title = window_title
 
-        if selected_hwnd:
+        offscreen_requested = bool(selected_hwnd and self._offscreen_cb.isChecked())
+        offscreen_supported = can_actions_run_offscreen([target_action], local_group_manager=player.get_local_group_manager()) if offscreen_requested else False
+        offscreen_enabled = offscreen_requested
+        if offscreen_enabled:
+            run_mode = "offscreen_hidden_taskbar"
+        else:
+            run_mode = "normal"
+        player.set_window_run_mode(run_mode)
+        if offscreen_requested and not offscreen_supported:
+            self._status_label.setText("已强制启用离屏后台；当前动作可能仍依赖前台。")
+
+        if selected_hwnd and not offscreen_enabled:
             self._window_utils.activate_window(selected_hwnd)
 
         # 进入单步调试运行状态：让右上角按钮可暂停/停止；
@@ -1093,19 +1093,13 @@ class MainWindow(MSFluentWindow):
             if action.action_type == ActionType.ACTION_GROUP_REF:
                 group_name = action.params.get('group_name', '')
                 repeat_count = action.repeat_count or 1
-                if player.infinite_loop:
-                    self._status_label.setText(f"动作组 [{group_name}] x{repeat_count} | 动作 {index + 1}/{total_actions}")
-                else:
-                    repeat = player.current_repeat
-                    total = player.repeat_count
-                    self._status_label.setText(f"第 {repeat}/{total} 轮 | 动作组 [{group_name}] x{repeat_count} | 动作 {index + 1}/{total_actions}")
+                repeat = player.current_repeat
+                total = player.repeat_count
+                self._status_label.setText(f"第 {repeat}/{total} 轮 | 动作组 [{group_name}] x{repeat_count} | 动作 {index + 1}/{total_actions}")
             else:
-                if player.infinite_loop:
-                    self._status_label.setText(f"{desc} | 动作 {index + 1}/{total_actions}")
-                else:
-                    repeat = player.current_repeat
-                    total = player.repeat_count
-                    self._status_label.setText(f"第 {repeat}/{total} 轮 | {desc} | 动作 {index + 1}/{total_actions}")
+                repeat = player.current_repeat
+                total = player.repeat_count
+                self._status_label.setText(f"第 {repeat}/{total} 轮 | {desc} | 动作 {index + 1}/{total_actions}")
         
         current_route_key = self._script_editor.get_current_route_key()
         if route_key == current_route_key:
@@ -1130,11 +1124,8 @@ class MainWindow(MSFluentWindow):
         player = self._get_current_player()
         if player:
             total_actions = len(player.actions)
-            if player.infinite_loop:
-                self._status_label.setText(f"执行中: 第 {repeat} 轮 | 动作 {action_index + 1}/{total_actions}")
-            else:
-                total = player.repeat_count
-                self._status_label.setText(f"执行中: 第 {repeat}/{total} 轮 | 动作 {action_index + 1}/{total_actions}")
+            total = player.repeat_count
+            self._status_label.setText(f"执行中: 第 {repeat}/{total} 轮 | 动作 {action_index + 1}/{total_actions}")
         
         if progress >= 0:
             self._progress_bar.setValue(int(progress))
@@ -1171,6 +1162,8 @@ class MainWindow(MSFluentWindow):
         if route_key == current_route_key:
             self._progress_bar.setVisible(False)
             player = self._get_current_player()
+            if player and hasattr(player, '_restore_window_after_run'):
+                player._restore_window_after_run()
 
             # 单步调试结束：用单步专属文案恢复界面，不发整段运行的完成通知。
             if self._single_debug_active:

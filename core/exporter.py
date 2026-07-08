@@ -111,6 +111,7 @@ class Exporter:
         lines.append("import os")
         lines.append("import base64")
         lines.append("import tempfile")
+        lines.append("import pyperclip")
         lines.append("")
         
         if self._embedded_images:
@@ -346,8 +347,11 @@ class Exporter:
         elif action.action_type == ActionType.KEY_TYPE:
             text = action.params.get('text', '')
             interval = action.params.get('interval', 0.0)
-            escaped_text = text.replace("'", "\\'")
-            code_lines.append(f"pyautogui.typewrite('{escaped_text}', interval={interval})")
+            escaped_text = text.replace("'", "\\'").replace("\\", "\\\\")
+            code_lines.append(f"pyperclip.copy('{escaped_text}')")
+            code_lines.append("pyautogui.hotkey('ctrl', 'v')")
+            if interval > 0:
+                code_lines.append(f"time.sleep({interval})")
         
         elif action.action_type == ActionType.HOTKEY:
             keys = action.params.get('keys', [])

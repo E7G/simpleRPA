@@ -6,6 +6,9 @@ from typing import List, Optional, Tuple
 
 
 user32 = ctypes.windll.user32 if sys.platform == 'win32' else None
+GWL_EXSTYLE = -20
+WS_EX_APPWINDOW = 0x00040000
+WS_EX_TOOLWINDOW = 0x00000080
 
 
 class POINT(ctypes.Structure):
@@ -146,6 +149,235 @@ class WindowUtils:
         except Exception:
             return False
 
+    def move_window_offscreen(self, hwnd: int) -> Optional[dict]:
+        if not self._win32_available or not user32:
+            return None
+
+        import win32gui
+        import win32con
+
+        try:
+            if not win32gui.IsWindow(hwnd):
+                return None
+
+            rect = win32gui.GetWindowRect(hwnd)
+            placement = win32gui.GetWindowPlacement(hwnd)
+            width = max(1, rect[2] - rect[0])
+            height = max(1, rect[3] - rect[1])
+
+            if win32gui.IsIconic(hwnd):
+                # 离屏模式启动时不要把最小化窗口带到前台，否则会在运行开始瞬间抢焦点。
+                win32gui.ShowWindow(hwnd, win32con.SW_SHOWNOACTIVATE)
+
+            virtual_left = user32.GetSystemMetrics(76)
+            virtual_top = user32.GetSystemMetrics(77)
+            virtual_width = user32.GetSystemMetrics(78)
+            virtual_height = user32.GetSystemMetrics(79)
+
+            offscreen_x = virtual_left + virtual_width + 120
+            max_top = virtual_top + max(0, virtual_height - height - 40)
+            offscreen_y = min(max(rect[1], virtual_top + 40), max_top)
+
+            win32gui.SetWindowPos(
+                hwnd,
+                None,
+                offscreen_x,
+                offscreen_y,
+                width,
+                height,
+                win32con.SWP_NOZORDER | win32con.SWP_NOACTIVATE,
+            )
+            win32gui.UpdateWindow(hwnd)
+
+            return {
+                'rect': rect,
+                'show_cmd': placement[1],
+            }
+        except Exception:
+            return None
+
+    def set_window_taskbar_visibility(self, hwnd: int, visible: bool) -> Optional[dict]:
+        if not self._win32_available or not user32:
+            return None
+
+        import win32gui
+
+        try:
+            if not win32gui.IsWindow(hwnd):
+                return None
+
+            if visible:
+                if self._com_taskbar_op(hwnd, delete=False):
+                    return {'method': 'com', 'removed': False}
+                return self._style_taskbar_set(hwnd, visible=True)
+            else:
+                if self._com_taskbar_op(hwnd, delete=True):
+                    return {'method': 'com', 'removed': True}
+                return self._style_taskbar_set(hwnd, visible=False)
+        except Exception:
+            return None
+
+    def restore_window_taskbar_visibility(self, hwnd: int, state: Optional[dict]) -> bool:
+        if not self._win32_available or not user32 or not state:
+            return False
+
+        try:
+            if not state.get('removed'):
+                return True
+            if state.get('method') == 'com':
+                return self._com_taskbar_op(hwnd, delete=False)
+            original_exstyle = state.get('exstyle')
+            original_style = state.get('style')
+            if original_exstyle is not None:
+                user32.SetWindowLongPtrW(hwnd, GWL_EXSTYLE, int(original_exstyle))
+            if original_style is not None:
+                user32.SetWindowLongPtrW(hwnd, GWL_STYLE, int(original_style))
+            else:
+                user32.SetWindowLongPtrW(hwnd, GWL_EXSTYLE, WS_EX_APPWINDOW)
+            import win32gui
+            import win32con
+            win32gui.SetWindowPos(
+                hwnd, None, 0, 0, 0, 0,
+                win32con.SWP_NOMOVE | win32con.SWP_NOSIZE
+                | win32con.SWP_NOZORDER | win32con.SWP_NOACTIVATE
+                | win32con.SWP_FRAMECHANGED,
+            )
+            win32gui.UpdateWindow(hwnd)
+            return True
+        except Exception:
+            return False
+
+    def _style_taskbar_set(self, hwnd: int, visible: bool) -> Optional[dict]:
+        import win32gui
+        import win32con
+
+        try:
+            if visible:
+                user32.SetWindowLongPtrW(hwnd, GWL_EXSTYLE, WS_EX_APPWINDOW)
+                win32gui.ShowWindow(hwnd, win32con.SW_SHOW)
+                win32gui.UpdateWindow(hwnd)
+                return {'method': 'style', 'removed': False}
+
+            original_style = user32.GetWindowLongPtrW(hwnd, GWL_STYLE)
+            original_exstyle = user32.GetWindowLongPtrW(hwnd, GWL_EXSTYLE)
+
+            win32gui.ShowWindow(hwnd, win32con.SW_HIDE)
+            user32.SetWindowLongPtrW(hwnd, GWL_EXSTYLE, WS_EX_TOOLWINDOW)
+            user32.SetWindowLongPtrW(hwnd, GWL_STYLE, win32con.WS_POPUP)
+            win32gui.ShowWindow(hwnd, win32con.SW_SHOW)
+            win32gui.UpdateWindow(hwnd)
+            return {'method': 'style', 'removed': True, 'exstyle': original_exstyle, 'style': original_style}
+        except Exception:
+            return None
+
+    @staticmethod
+    def _com_taskbar_op(hwnd: int, delete: bool) -> bool:
+        import ctypes
+        from ctypes import wintypes, byref, c_void_p, c_long, Structure, c_ulong, c_ushort, c_ubyte, POINTER
+
+        class GUID(Structure):
+            _fields_ = [
+                ("Data1", c_ulong),
+                ("Data2", c_ushort),
+                ("Data3", c_ushort),
+                ("Data4", c_ubyte * 8),
+            ]
+
+        CLSID = GUID()
+        CLSID.Data1 = 0x56FDF344
+        CLSID.Data2 = 0xFD6D
+        CLSID.Data3 = 0x11D0
+        CLSID.Data4 = (c_ubyte * 8)(0x95, 0x8A, 0x00, 0x60, 0x97, 0xC9, 0xA0, 0x90)
+
+        iids = [
+            (0x56FDF342, 0xFD6D, 0x11D0, (0x95, 0x8A, 0x00, 0x60, 0x97, 0xC9, 0xA0, 0x90)),
+            (0x602D4995, 0xB13A, 0x429B, (0xA6, 0x6E, 0x19, 0x35, 0xE4, 0x4F, 0x43, 0x17)),
+            (0xEA1AFB91, 0x9E28, 0x4B86, (0x90, 0xE9, 0x9E, 0x9F, 0x8A, 0x5E, 0xEF, 0xAF)),
+        ]
+
+        ole32 = ctypes.windll.ole32
+        ole32.CoInitializeEx(None, 0x2)
+
+        try:
+            for d1, d2, d3, d4 in iids:
+                IID = GUID()
+                IID.Data1 = d1
+                IID.Data2 = d2
+                IID.Data3 = d3
+                IID.Data4 = (c_ubyte * 8)(*d4)
+
+                pList = c_void_p()
+                hr = ole32.CoCreateInstance(
+                    byref(CLSID), None, 0x1, byref(IID), byref(pList)
+                )
+                if hr != 0 or not pList:
+                    continue
+
+                try:
+                    vtable = ctypes.cast(pList, POINTER(c_void_p)).contents.value
+
+                    hrinit_ptr = ctypes.cast(
+                        vtable + 3 * ctypes.sizeof(c_void_p), POINTER(c_void_p)
+                    ).contents.value
+                    ctypes.CFUNCTYPE(c_long, c_void_p)(hrinit_ptr)(pList)
+
+                    idx = 5 if delete else 4
+                    func_ptr = ctypes.cast(
+                        vtable + idx * ctypes.sizeof(c_void_p), POINTER(c_void_p)
+                    ).contents.value
+                    OpFunc = ctypes.CFUNCTYPE(c_long, c_void_p, wintypes.HWND)
+                    hr = OpFunc(func_ptr)(pList, hwnd)
+                    return hr == 0
+                finally:
+                    vtable = ctypes.cast(pList, POINTER(c_void_p)).contents.value
+                    release_ptr = ctypes.cast(
+                        vtable + 2 * ctypes.sizeof(c_void_p), POINTER(c_void_p)
+                    ).contents.value
+                    ctypes.CFUNCTYPE(c_long, c_void_p)(release_ptr)(pList)
+
+            return False
+        finally:
+            ole32.CoUninitialize()
+
+    def restore_window_placement(self, hwnd: int, placement_info: Optional[dict]) -> bool:
+        if not self._win32_available or not placement_info:
+            return False
+
+        import win32gui
+        import win32con
+
+        try:
+            if not win32gui.IsWindow(hwnd):
+                return False
+
+            rect = placement_info.get('rect')
+            show_cmd = placement_info.get('show_cmd', win32con.SW_SHOWNORMAL)
+            if rect and len(rect) == 4:
+                width = max(1, rect[2] - rect[0])
+                height = max(1, rect[3] - rect[1])
+                win32gui.SetWindowPos(
+                    hwnd,
+                    None,
+                    rect[0],
+                    rect[1],
+                    width,
+                    height,
+                    win32con.SWP_NOZORDER | win32con.SWP_NOACTIVATE,
+                )
+
+            if show_cmd in (win32con.SW_SHOWMINIMIZED, win32con.SW_MINIMIZE, win32con.SW_SHOWMINNOACTIVE):
+                win32gui.ShowWindow(hwnd, win32con.SW_SHOWMINNOACTIVE)
+            elif show_cmd == win32con.SW_SHOWMAXIMIZED:
+                win32gui.ShowWindow(hwnd, win32con.SW_MAXIMIZE)
+            elif show_cmd == win32con.SW_HIDE:
+                win32gui.ShowWindow(hwnd, win32con.SW_HIDE)
+            else:
+                win32gui.ShowWindow(hwnd, win32con.SW_SHOWNOACTIVATE)
+
+            return True
+        except Exception:
+            return False
+
     def force_foreground_window(self, hwnd: int) -> bool:
         """强制把窗口带到前台并激活。
 
@@ -200,7 +432,6 @@ class WindowUtils:
                 if attached_target:
                     user32.AttachThreadInput(cur_thread, target_thread, False)
 
-            # 触发一次重绘，避免后台窗口首帧空白
             try:
                 win32gui.UpdateWindow(hwnd)
             except Exception:

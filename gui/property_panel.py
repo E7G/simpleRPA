@@ -42,6 +42,56 @@ class PropertyPanel(QWidget):
     
     def set_window_offset(self, offset: Optional[Tuple[int, int]]):
         self._window_offset = offset
+        use_relative = bool(
+            self._current_action
+            and (
+                self._current_action.use_relative_coords
+                or self._current_action.action_type in [ActionType.MOUSE_CLICK_RELATIVE, ActionType.MOUSE_MOVE_RELATIVE]
+            )
+        )
+        for widget in set(self._param_widgets.values()):
+            if isinstance(widget, CoordinateWidget):
+                widget.set_window_offset(offset if use_relative else None)
+                widget.set_screen_to_coord(self._screen_to_client if use_relative else None)
+
+    def _get_main_window(self):
+        widget = self
+        while widget.parent():
+            widget = widget.parent()
+            if hasattr(widget, 'window') and callable(widget.window):
+                main_window = widget.window()
+                if main_window and main_window != widget:
+                    return main_window
+        return QApplication.instance().activeWindow() if QApplication.instance() else None
+
+    def _get_window_match_region(self) -> Optional[Tuple[int, int, int, int]]:
+        main_window = self._get_main_window()
+        if not main_window or not hasattr(main_window, '_window_selector'):
+            return None
+
+        selector = main_window._window_selector
+        if not hasattr(selector, 'get_client_match_region'):
+            return None
+        return selector.get_client_match_region()
+
+    def _get_window_offset(self) -> Optional[Tuple[int, int]]:
+        main_window = self._get_main_window()
+        if main_window and hasattr(main_window, '_window_selector'):
+            offset = main_window._window_selector.get_window_offset()
+            if offset:
+                self._window_offset = offset
+                return offset
+        return self._window_offset
+
+    def _screen_to_client(self, screen_x: int, screen_y: int) -> Optional[Tuple[int, int]]:
+        main_window = self._get_main_window()
+        if not main_window or not hasattr(main_window, '_window_selector'):
+            return None
+
+        selector = main_window._window_selector
+        if not hasattr(selector, 'screen_to_client'):
+            return None
+        return selector.screen_to_client(screen_x, screen_y)
     
     def set_local_group_manager(self, manager):
         self._local_group_manager = manager
@@ -177,10 +227,15 @@ class PropertyPanel(QWidget):
             
             use_relative = self._current_action.use_relative_coords or \
                            self._current_action.action_type in [ActionType.MOUSE_CLICK_RELATIVE, ActionType.MOUSE_MOVE_RELATIVE]
-            window_offset_for_pick = self._window_offset if use_relative else None
+            window_offset_for_pick = self._get_window_offset() if use_relative else None
+            screen_to_coord = self._screen_to_client if use_relative else None
             
             if param_name in ['x', 'y']:
-                coord_widget = CoordinateWidget(title="坐标", window_offset=window_offset_for_pick)
+                coord_widget = CoordinateWidget(
+                    title="坐标",
+                    window_offset=window_offset_for_pick,
+                    screen_to_coord=screen_to_coord,
+                )
                 y_value = self._current_action.params.get('y', 0)
                 coord_widget.set_coordinates(current_value, y_value)
                 coord_widget.coordinates_changed.connect(self._on_coord_changed)
@@ -193,7 +248,11 @@ class PropertyPanel(QWidget):
             
             if param_name in ['start_x', 'start_y', 'end_x', 'end_y']:
                 if param_name == 'start_x':
-                    start_coord = CoordinateWidget(title="起始坐标", window_offset=window_offset_for_pick)
+                    start_coord = CoordinateWidget(
+                        title="起始坐标",
+                        window_offset=window_offset_for_pick,
+                        screen_to_coord=screen_to_coord,
+                    )
                     start_y = self._current_action.params.get('start_y', 0)
                     start_coord.set_coordinates(current_value, start_y)
                     start_coord.coordinates_changed.connect(self._on_start_coord_changed)
@@ -203,7 +262,11 @@ class PropertyPanel(QWidget):
                     processed_params.add('start_x')
                     processed_params.add('start_y')
                 elif param_name == 'end_x':
-                    end_coord = CoordinateWidget(title="结束坐标", window_offset=window_offset_for_pick)
+                    end_coord = CoordinateWidget(
+                        title="结束坐标",
+                        window_offset=window_offset_for_pick,
+                        screen_to_coord=screen_to_coord,
+                    )
                     end_y = self._current_action.params.get('end_y', 0)
                     end_coord.set_coordinates(current_value, end_y)
                     end_coord.coordinates_changed.connect(self._on_end_coord_changed)
@@ -644,7 +707,7 @@ class PropertyPanel(QWidget):
         action_type = action.action_type
         params = action.params
         
-        offset_x, offset_y = self._window_offset if self._window_offset else (0, 0)
+        offset_x, offset_y = self._get_window_offset() if self._get_window_offset() else (0, 0)
         
         if action_type in [ActionType.MOUSE_CLICK, ActionType.MOUSE_DOUBLE_CLICK, 
                           ActionType.MOUSE_RIGHT_CLICK]:
@@ -712,6 +775,6 @@ class PropertyPanel(QWidget):
             image_path = params.get('image_path', '')
             confidence = params.get('confidence', 0.9)
             if image_path and os.path.exists(image_path):
-                self._preview_overlay.show_image_match(image_path, confidence)
+                self._preview_overlay.show_image_match(image_path, confidence, self._get_window_match_region())
             else:
                 self._preview_overlay.show_text_preview("请先选择图片文件", "图片识别预览")

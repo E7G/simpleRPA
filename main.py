@@ -2,29 +2,39 @@
 # -*- coding: utf-8 -*-
 
 import sys
-import traceback
+import os
+import faulthandler
 
-from PyQt5.QtCore import qInstallMessageHandler, QtMsgType
+LOG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "crash.log")
+log_f = open(LOG_FILE, "w", encoding="utf-8")
+faulthandler.enable(file=log_f)
+
+def _flush(*args):
+    log_f.flush()
+    log_f.write(f"flushed\n")
+    log_f.flush()
+
+import traceback
 
 def exception_hook(exc_type, exc_value, exc_traceback):
     error_msg = ''.join(traceback.format_exception(exc_type, exc_value, exc_traceback))
-    print(f"未捕获的异常:\n{error_msg}")
+    log_f.write(f"\nUnhandled exception:\n{error_msg}\n")
+    log_f.flush()
+    sys.__excepthook__(exc_type, exc_value, exc_traceback)
 
 sys.excepthook = exception_hook
 
-def message_handler(msg_type, context, msg):
-    if msg_type == QtMsgType.QtWarningMsg and "QBackingStore::endPaint" in msg:
-        return
-    if msg_type == QtMsgType.QtWarningMsg:
-        print(f"Warning: {msg}")
-    elif msg_type == QtMsgType.QtCriticalMsg:
-        print(f"Critical: {msg}")
-    elif msg_type == QtMsgType.QtFatalMsg:
-        print(f"Fatal: {msg}")
-
-qInstallMessageHandler(message_handler)
+import atexit
+atexit.register(lambda: log_f.write("atexit\n") or log_f.flush())
 
 from gui.app import run_app
 
 if __name__ == '__main__':
-    run_app()
+    log_f.write(f"__main__ entered\n")
+    log_f.flush()
+    try:
+        run_app()
+    except Exception as e:
+        log_f.write(f"run_app exception: {e}\n")
+        log_f.flush()
+        raise

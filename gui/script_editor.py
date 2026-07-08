@@ -797,6 +797,11 @@ class ScriptTabContent(QWidget):
         main_window = self._get_main_window()
         if main_window and hasattr(main_window, '_window_selector'):
             window_offset = main_window._window_selector.get_window_offset()
+        match_region = None
+        if main_window and hasattr(main_window, '_window_selector'):
+            selector = main_window._window_selector
+            if hasattr(selector, 'get_client_match_region'):
+                match_region = selector.get_client_match_region()
         
         if action.action_type in [ActionType.MOUSE_CLICK, ActionType.MOUSE_CLICK_RELATIVE]:
             x = action.params.get('x', 0)
@@ -845,10 +850,10 @@ class ScriptTabContent(QWidget):
             keys = action.params.get('keys', [])
             self._preview_overlay.show_hotkey_preview(keys)
         
-        elif action.action_type == ActionType.IMAGE_CLICK:
+        elif action.action_type in [ActionType.IMAGE_CLICK, ActionType.IMAGE_WAIT_CLICK, ActionType.IMAGE_CHECK]:
             image_path = action.params.get('image_path', '')
             confidence = action.params.get('confidence', 0.9)
-            self._preview_overlay.show_image_match(image_path, confidence)
+            self._preview_overlay.show_image_match(image_path, confidence, match_region)
         
         elif action.action_type == ActionType.ACTION_GROUP_REF:
             group_name = action.params.get('group_name', '')
@@ -947,8 +952,6 @@ class ScriptEditor(QWidget):
         layout.setSpacing(8)
         
         header_layout = QHBoxLayout()
-        self._action_count_label = BodyLabel("0 个步骤")
-        header_layout.addWidget(self._action_count_label)
         header_layout.addStretch()
         layout.addLayout(header_layout)
         
@@ -994,8 +997,6 @@ class ScriptEditor(QWidget):
             self._tab_bar.addTab(route_key, name)
             self._tab_bar.setCurrentTab(route_key)
             self._stacked_widget.setCurrentWidget(tab_content)
-            
-            self._update_action_count()
         finally:
             self.setUpdatesEnabled(True)
         
@@ -1031,15 +1032,12 @@ class ScriptEditor(QWidget):
         self._stacked_widget.removeWidget(tab_content)
         tab_content.deleteLater()
         self._tab_bar.removeTab(index)
-        
-        self._update_action_count()
     
     def _on_tab_changed(self, index: int):
         route_key = self._get_route_key_by_index(index)
         if route_key and route_key in self._tabs:
             tab_content = self._tabs[route_key]
             self._stacked_widget.setCurrentWidget(tab_content)
-            self._update_action_count()
             self.tab_changed.emit(route_key)
             if hasattr(tab_content, '_refresh_groups'):
                 tab_content._refresh_groups()
@@ -1061,15 +1059,6 @@ class ScriptEditor(QWidget):
     
     def _on_actions_changed(self):
         self.actions_changed.emit()
-        self._update_action_count()
-    
-    def _update_action_count(self):
-        current_tab = self._get_current_tab()
-        if current_tab:
-            count = len(current_tab.get_actions())
-            self._action_count_label.setText(f"{count} 个步骤")
-        else:
-            self._action_count_label.setText("0 个步骤")
     
     def add_action(self, action: ScriptAction):
         current_tab = self._get_current_tab()

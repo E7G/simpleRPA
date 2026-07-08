@@ -25,8 +25,6 @@ class Config:
     open_tabs: list = field(default_factory=list)
     tab_files: Dict[str, str] = field(default_factory=dict)
     current_tab_index: int = 0
-    infinite_loop: bool = False
-    timeout_seconds: float = 0
     
     last_dashboard_list: str = ''
 
@@ -39,6 +37,8 @@ class Config:
     schedule_last_run_date: str = ''
 
     minimize_to_tray: bool = True
+    run_window_offscreen: bool = False
+    run_window_hide_taskbar: bool = False
 
     _config_path: str = field(default='', repr=False)
     
@@ -73,8 +73,6 @@ class Config:
                 'open_tabs': self.open_tabs,
                 'tab_files': self.tab_files,
                 'current_tab_index': self.current_tab_index,
-                'infinite_loop': self.infinite_loop,
-                'timeout_seconds': self.timeout_seconds,
                 'last_dashboard_list': self.last_dashboard_list,
                 'schedule_enabled': self.schedule_enabled,
                 'schedule_mode': self.schedule_mode,
@@ -84,6 +82,8 @@ class Config:
                 'schedule_prompt_countdown': self.schedule_prompt_countdown,
                 'schedule_last_run_date': self.schedule_last_run_date,
                 'minimize_to_tray': self.minimize_to_tray,
+                'run_window_offscreen': self.run_window_offscreen,
+                'run_window_hide_taskbar': self.run_window_hide_taskbar,
             }
             
             with open(save_path, 'w', encoding='utf-8') as f:
@@ -122,8 +122,6 @@ class Config:
             self.open_tabs = data.get('open_tabs', [])
             self.tab_files = data.get('tab_files', {})
             self.current_tab_index = data.get('current_tab_index', 0)
-            self.infinite_loop = data.get('infinite_loop', False)
-            self.timeout_seconds = data.get('timeout_seconds', 0)
             self.last_dashboard_list = data.get('last_dashboard_list', '')
             self.schedule_enabled = data.get('schedule_enabled', False)
             self.schedule_mode = data.get('schedule_mode', 'idle')
@@ -133,6 +131,8 @@ class Config:
             self.schedule_prompt_countdown = data.get('schedule_prompt_countdown', 15)
             self.schedule_last_run_date = data.get('schedule_last_run_date', '')
             self.minimize_to_tray = data.get('minimize_to_tray', True)
+            self.run_window_offscreen = data.get('run_window_offscreen', False)
+            self.run_window_hide_taskbar = data.get('run_window_hide_taskbar', False)
 
             return True
         except Exception as e:

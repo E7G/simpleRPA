@@ -12,10 +12,12 @@ class TrayService(QObject):
     show_window_requested = pyqtSignal()
     run_dashboard_requested = pyqtSignal()
     quit_requested = pyqtSignal()
+    startup_changed = pyqtSignal(bool)
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self._tray: Optional[QSystemTrayIcon] = None
+        self._startup_action: Optional[QAction] = None
 
     @property
     def is_available(self) -> bool:
@@ -25,7 +27,7 @@ class TrayService(QObject):
     def is_visible(self) -> bool:
         return self._tray is not None and self._tray.isVisible()
 
-    def setup(self, window, icon_path: Optional[str] = None):
+    def setup(self, window, icon_path: Optional[str] = None, startup_enabled: bool = False):
         if not self.is_available:
             return False
 
@@ -42,12 +44,12 @@ class TrayService(QObject):
 
         self._tray = QSystemTrayIcon(icon, window)
         self._tray.setToolTip("SimpleRPA")
-        self._build_menu()
+        self._build_menu(startup_enabled)
         self._tray.activated.connect(self._on_activated)
         self._tray.show()
         return True
 
-    def _build_menu(self):
+    def _build_menu(self, startup_enabled: bool = False):
         menu = QMenu()
 
         show_action = QAction("显示主窗口", menu)
@@ -60,11 +62,25 @@ class TrayService(QObject):
 
         menu.addSeparator()
 
+        self._startup_action = QAction("开机自启动", menu)
+        self._startup_action.setCheckable(True)
+        self._startup_action.setChecked(startup_enabled)
+        self._startup_action.toggled.connect(self.startup_changed.emit)
+        menu.addAction(self._startup_action)
+
+        menu.addSeparator()
+
         quit_action = QAction("退出", menu)
         quit_action.triggered.connect(self.quit_requested.emit)
         menu.addAction(quit_action)
 
         self._tray.setContextMenu(menu)
+
+    def set_startup_checked(self, checked: bool):
+        if self._startup_action:
+            self._startup_action.blockSignals(True)
+            self._startup_action.setChecked(checked)
+            self._startup_action.blockSignals(False)
 
     def _on_activated(self, reason):
         if reason == QSystemTrayIcon.DoubleClick:

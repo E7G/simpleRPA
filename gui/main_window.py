@@ -24,6 +24,7 @@ from core.action_group import LocalActionGroupManager
 from utils.config import Config
 from utils.window_utils import WindowUtils, WindowInfo
 from utils.update_checker import UpdateChecker
+from utils.startup import StartupManager
 
 from .action_panel import ActionPanel
 from .script_editor import ScriptEditor
@@ -95,13 +96,22 @@ class MainWindow(MSFluentWindow):
     def _setup_tray(self):
         from .app import get_icon_path
         self._tray_service = TrayService(self)
-        ok = self._tray_service.setup(self, get_icon_path())
+        ok = self._tray_service.setup(
+            self, get_icon_path(), startup_enabled=StartupManager.is_enabled()
+        )
         if not ok:
             self._tray_service = None
             return
         self._tray_service.show_window_requested.connect(self._restore_from_tray)
         self._tray_service.run_dashboard_requested.connect(self._run_all_from_tray)
         self._tray_service.quit_requested.connect(self._exit_app)
+        self._tray_service.startup_changed.connect(self._set_startup_enabled)
+
+    def _set_startup_enabled(self, enabled: bool):
+        if StartupManager.set_enabled(enabled):
+            return
+        self._tray_service.set_startup_checked(not enabled)
+        self._tray_service.show_message("SimpleRPA", "开机自启动设置失败")
 
     def _restore_from_tray(self):
         self.showNormal()

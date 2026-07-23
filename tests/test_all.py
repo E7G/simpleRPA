@@ -435,6 +435,21 @@ class TestPlayer(unittest.TestCase):
 
         player._window_utils.activate_window.assert_not_called()
 
+    def test_offscreen_run_rejects_foreground_input_before_moving_window(self):
+        from core.actions import Action, ActionType
+
+        player = self.Player()
+        player.actions = [Action(action_type=ActionType.KEY_TYPE, params={'text': 'do not leak'})]
+        player._window_hwnd = 123
+        player._window_utils = MagicMock()
+        player.set_window_run_mode('offscreen_hidden_taskbar')
+
+        ok, error = player._prepare_window_for_run()
+
+        self.assertFalse(ok)
+        self.assertIn('依赖前台输入', error)
+        player._window_utils.move_window_offscreen.assert_not_called()
+
 
 class TestWindowOffsetProvider(unittest.TestCase):
     def test_get_current_offset_prefers_client_origin(self):
@@ -723,6 +738,32 @@ class TestWindowUtils(unittest.TestCase):
             state = utils.move_window_offscreen(123)
 
         self.assertEqual(state, {'rect': (10, 20, 210, 120), 'show_cmd': 2})
+        self.assertIn(("ShowWindow", 123, fake_win32con.SW_SHOWNOACTIVATE), calls)
+
+    def test_taskbar_style_fallback_reshows_without_activation(self):
+        utils = self.WindowUtils()
+        utils._win32_available = True
+        calls = []
+        original_style = 0x00CF0000
+        original_exstyle = 0x00040000
+        fake_user32 = SimpleNamespace(
+            GetWindowLongPtrW=lambda hwnd, index: original_style if index == -16 else original_exstyle,
+            SetWindowLongPtrW=lambda hwnd, index, value: calls.append(("SetWindowLongPtrW", hwnd, index, value)),
+        )
+        fake_win32con = SimpleNamespace(SW_HIDE=0, SW_SHOWNOACTIVATE=4)
+        fake_win32gui = SimpleNamespace(
+            ShowWindow=lambda hwnd, cmd: calls.append(("ShowWindow", hwnd, cmd)),
+            UpdateWindow=lambda hwnd: calls.append(("UpdateWindow", hwnd)),
+        )
+
+        with patch('utils.window_utils.user32', fake_user32), patch.dict(
+            sys.modules,
+            {'win32gui': fake_win32gui, 'win32con': fake_win32con},
+        ):
+            state = utils._style_taskbar_set(123, visible=False)
+
+        self.assertEqual(state['style'], original_style)
+        self.assertEqual(state['exstyle'], original_exstyle)
         self.assertIn(("ShowWindow", 123, fake_win32con.SW_SHOWNOACTIVATE), calls)
 
     def test_restore_window_placement_minimized_without_activation(self):

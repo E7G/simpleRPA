@@ -39,6 +39,7 @@ class BackgroundClicker:
         self._render_hwnd: Optional[int] = None
         self._title: str = ""
         self._win32_available = self._check_win32()
+        self._dm_binding = None
         
         if hwnd:
             self.attach_by_hwnd(hwnd)
@@ -98,6 +99,7 @@ class BackgroundClicker:
         
         self._main_hwnd, self._title = result[0]
         self._find_render_window()
+        self._try_bind_dmsoft()
         return True
     
     def attach_by_hwnd(self, hwnd: int) -> bool:
@@ -113,7 +115,15 @@ class BackgroundClicker:
         self._main_hwnd = hwnd
         self._title = win32gui.GetWindowText(hwnd)
         self._find_render_window()
+        self._try_bind_dmsoft()
         return True
+
+    def _try_bind_dmsoft(self):
+        try:
+            from utils.dmsoft import DmSoftBinding
+            self._dm_binding = DmSoftBinding.try_bind(self._main_hwnd)
+        except Exception:
+            self._dm_binding = None
     
     def _find_render_window(self):
         """查找 Chrome 渲染子窗口"""
@@ -161,6 +171,15 @@ class BackgroundClicker:
             return self._foreground_click(x, y, button)
     
     def _background_click(self, x: int, y: int, button: str) -> BackgroundClickResult:
+        if self._dm_binding and self._dm_binding.dm:
+            try:
+                dm = self._dm_binding.dm
+                dm.MoveTo(int(x), int(y))
+                method = {'right': 'RightClick', 'middle': 'MiddleClick'}.get(button, 'LeftClick')
+                getattr(dm, method)()
+                return BackgroundClickResult(True, "后台点击成功(dmsoft)", True)
+            except Exception:
+                pass
         """后台模式点击"""
         target_hwnd = self._render_hwnd or self._main_hwnd
         lParam = self._make_lparam(x, y)
@@ -213,6 +232,31 @@ class BackgroundClicker:
         
         time.sleep(0.1)
         return self.click(x, y, 'left', background)
+
+    def drag(self, start_x: int, start_y: int, end_x: int, end_y: int, background: bool = True) -> BackgroundClickResult:
+        if not self._main_hwnd:
+            return BackgroundClickResult(False, "未附加到窗口", False)
+        if not background:
+            return BackgroundClickResult(False, "仅支持后台拖拽", False)
+        if self._dm_binding and self._dm_binding.dm:
+            try:
+                dm = self._dm_binding.dm
+                dm.MoveTo(int(start_x), int(start_y))
+                dm.LeftDown()
+                dm.MoveTo(int(end_x), int(end_y))
+                dm.LeftUp()
+                return BackgroundClickResult(True, "后台拖拽成功(dmsoft)", True)
+            except Exception:
+                pass
+        target = self._render_hwnd or self._main_hwnd
+        try:
+            user32.PostMessageW(target, WM_MOUSEMOVE, 0, self._make_lparam(start_x, start_y))
+            user32.PostMessageW(target, WM_LBUTTONDOWN, MK_LBUTTON, self._make_lparam(start_x, start_y))
+            user32.PostMessageW(target, WM_MOUSEMOVE, MK_LBUTTON, self._make_lparam(end_x, end_y))
+            user32.PostMessageW(target, WM_LBUTTONUP, 0, self._make_lparam(end_x, end_y))
+            return BackgroundClickResult(True, "后台拖拽成功", True)
+        except Exception as e:
+            return BackgroundClickResult(False, f"后台拖拽失败: {e}", True)
     
     def move(self, x: int, y: int, background: bool = True) -> BackgroundClickResult:
         """移动鼠标"""
@@ -220,6 +264,12 @@ class BackgroundClicker:
             return BackgroundClickResult(False, "未附加到窗口", False)
         
         if background:
+            if self._dm_binding and self._dm_binding.dm:
+                try:
+                    self._dm_binding.dm.MoveTo(int(x), int(y))
+                    return BackgroundClickResult(True, "后台移动成功(dmsoft)", True)
+                except Exception:
+                    pass
             target_hwnd = self._render_hwnd or self._main_hwnd
             lParam = self._make_lparam(x, y)
             try:
@@ -242,6 +292,9 @@ class BackgroundClicker:
         """滚动鼠标滚轮"""
         if not self._main_hwnd:
             return BackgroundClickResult(False, "未附加到窗口", False)
+
+        if background:
+            return self.scroll_background(x, y, clicks)
         
         if background:
             return BackgroundClickResult(False, "后台模式暂不支持滚轮操作", True)
@@ -256,6 +309,107 @@ class BackgroundClicker:
             except Exception as e:
                 return BackgroundClickResult(False, f"前台滚动失败: {str(e)}", False)
 
+    def key_press(self, key: str) -> BackgroundClickResult:
+        if not self._main_hwnd:
+            return BackgroundClickResult(False, "未附加到窗口", False)
+        if self._dm_binding and self._dm_binding.dm:
+            try:
+                self._dm_binding.dm.KeyPress(self._vk_code(key))
+                return BackgroundClickResult(True, "后台按键成功(dmsoft)", True)
+            except Exception:
+                pass
+        try:
+            import win32con
+            target = self._render_hwnd or self._main_hwnd
+            vk = self._vk_code(key)
+            user32.PostMessageW(target, win32con.WM_KEYDOWN, vk, 0)
+            user32.PostMessageW(target, win32con.WM_KEYUP, vk, 0)
+            return BackgroundClickResult(True, "后台按键成功", True)
+        except Exception as e:
+            return BackgroundClickResult(False, f"后台按键失败: {e}", True)
+
+    def type_text(self, text: str) -> BackgroundClickResult:
+        if self._dm_binding and self._dm_binding.dm:
+            try:
+                self._dm_binding.dm.SendString(self._main_hwnd, str(text))
+                return BackgroundClickResult(True, "后台输入成功(dmsoft)", True)
+            except Exception:
+                pass
+        try:
+            target = self._render_hwnd or self._main_hwnd
+            for char in str(text):
+                user32.PostMessageW(target, 0x0102, ord(char), 0)
+            return BackgroundClickResult(True, "后台输入成功", True)
+        except Exception as e:
+            return BackgroundClickResult(False, f"后台输入失败: {e}", True)
+
+    def hotkey(self, keys) -> BackgroundClickResult:
+        keys = list(keys or [])
+        if not keys:
+            return BackgroundClickResult(True, "", True)
+        try:
+            if self._dm_binding and self._dm_binding.dm:
+                dm = self._dm_binding.dm
+                codes = [self._vk_code(key) for key in keys]
+                for code in codes:
+                    dm.KeyDown(code)
+                for code in reversed(codes):
+                    dm.KeyUp(code)
+            else:
+                import win32con
+                target = self._render_hwnd or self._main_hwnd
+                codes = [self._vk_code(key) for key in keys]
+                for code in codes:
+                    user32.PostMessageW(target, win32con.WM_KEYDOWN, code, 0)
+                for code in reversed(codes):
+                    user32.PostMessageW(target, win32con.WM_KEYUP, code, 0)
+            return BackgroundClickResult(True, "后台快捷键成功", True)
+        except Exception as e:
+            return BackgroundClickResult(False, f"后台快捷键失败: {e}", True)
+
+    @staticmethod
+    def _vk_code(key: str) -> int:
+        import win32con
+        key_name = str(key or "").upper()
+        aliases = {
+            'ENTER': win32con.VK_RETURN, 'RETURN': win32con.VK_RETURN,
+            'ESC': win32con.VK_ESCAPE, 'ESCAPE': win32con.VK_ESCAPE,
+            'TAB': win32con.VK_TAB, 'SPACE': win32con.VK_SPACE,
+            'BACKSPACE': win32con.VK_BACK, 'DELETE': win32con.VK_DELETE,
+            'LEFT': win32con.VK_LEFT, 'RIGHT': win32con.VK_RIGHT,
+            'UP': win32con.VK_UP, 'DOWN': win32con.VK_DOWN,
+            'CTRL': win32con.VK_CONTROL, 'CONTROL': win32con.VK_CONTROL,
+            'SHIFT': win32con.VK_SHIFT, 'ALT': win32con.VK_MENU,
+        }
+        if key_name in aliases:
+            return aliases[key_name]
+        if len(key_name) == 1:
+            return ord(key_name)
+        if key_name.startswith('F') and key_name[1:].isdigit():
+            n = int(key_name[1:])
+            if 1 <= n <= 24:
+                return win32con.VK_F1 + n - 1
+        return ord(key_name[:1] or "\0")
+
+    def scroll_background(self, x: int, y: int, clicks: int) -> BackgroundClickResult:
+        if not self._main_hwnd:
+            return BackgroundClickResult(False, "未附加到窗口", True)
+        try:
+            if self._dm_binding and self._dm_binding.dm:
+                dm = self._dm_binding.dm
+                dm.MoveTo(int(x), int(y))
+                method = 'WheelUp' if clicks > 0 else 'WheelDown'
+                for _ in range(abs(int(clicks))):
+                    getattr(dm, method)()
+            else:
+                import win32con
+                target = self._render_hwnd or self._main_hwnd
+                delta = int(clicks) * 120
+                user32.PostMessageW(target, win32con.WM_MOUSEWHEEL, (delta << 16), self._make_lparam(x, y))
+            return BackgroundClickResult(True, "后台滚动成功", True)
+        except Exception as e:
+            return BackgroundClickResult(False, f"后台滚动失败: {e}", True)
+
     def capture(self, background: bool = True):
         """截取目标窗口客户区图像。"""
         if not self._main_hwnd:
@@ -264,10 +418,7 @@ class BackgroundClicker:
         target_hwnd = self._render_hwnd or self._main_hwnd
         if background:
             image = self._background_capture(target_hwnd)
-            if image is not None:
-                return image
-            return None
-
+            return image
         return self._foreground_capture(target_hwnd)
 
     def _background_capture(self, hwnd: int):
@@ -281,6 +432,11 @@ class BackgroundClicker:
             height = bottom - top
             if width <= 0 or height <= 0:
                 return None
+
+            if self._dm_binding and self._dm_binding.dm:
+                image = self._dm_binding.capture(width, height)
+                if image is not None:
+                    return image
 
             hwnd_dc = win32gui.GetWindowDC(hwnd)
             mfc_dc = win32ui.CreateDCFromHandle(hwnd_dc)

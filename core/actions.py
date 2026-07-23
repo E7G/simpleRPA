@@ -55,6 +55,15 @@ class VariableManager:
 
 
 OFFSCREEN_BACKGROUND_ACTION_TYPES = {
+    ActionType.MOUSE_CLICK,
+    ActionType.MOUSE_DOUBLE_CLICK,
+    ActionType.MOUSE_RIGHT_CLICK,
+    ActionType.MOUSE_MOVE,
+    ActionType.MOUSE_DRAG,
+    ActionType.MOUSE_SCROLL,
+    ActionType.KEY_PRESS,
+    ActionType.KEY_TYPE,
+    ActionType.HOTKEY,
     ActionType.MOUSE_MOVE_RELATIVE,
     ActionType.MOUSE_CLICK_RELATIVE,
     ActionType.IMAGE_CLICK,
@@ -183,6 +192,21 @@ class Action:
 
         return None
 
+    def _background_input(self):
+        """Return clicker only when this action is explicitly background-bound."""
+        if not self.background_mode or not (self.window_title or self._get_runtime_window_hwnd()):
+            return None
+        clicker = self._create_background_clicker()
+        if not clicker:
+            raise Exception(f"未找到后台窗口: {self.window_title or self._get_runtime_window_hwnd()}")
+        return clicker
+
+    def _background_client_coords(self, x, y):
+        if self.use_relative_coords:
+            return int(x or 0), int(y or 0)
+        coords = self._screen_to_window_client_coords(int(x or 0), int(y or 0))
+        return coords or (int(x or 0), int(y or 0))
+
     def _locate_in_image(self, pyautogui, image_path: str, haystack, confidence: float):
         locate_fn = getattr(pyautogui, 'locate', None)
         if locate_fn:
@@ -298,24 +322,53 @@ class Action:
             if self.action_type == ActionType.MOUSE_CLICK:
                 button = self.params.get('button', 'left')
                 clicks = self.params.get('clicks', 1)
+                clicker = self._background_input()
+                if clicker:
+                    bx, by = self._background_client_coords(x, y)
+                    for _ in range(max(1, int(clicks))):
+                        result = clicker.click(bx, by, button=button, background=True)
+                        if not result.success:
+                            raise Exception(result.message or "后台点击失败")
+                    return True
                 if x is not None and y is not None:
                     pyautogui.click(x=x, y=y, button=button, clicks=clicks)
                 else:
                     pyautogui.click(button=button, clicks=clicks)
             
             elif self.action_type == ActionType.MOUSE_DOUBLE_CLICK:
+                clicker = self._background_input()
+                if clicker:
+                    bx, by = self._background_client_coords(x, y)
+                    result = clicker.double_click(bx, by, background=True)
+                    if not result.success:
+                        raise Exception(result.message or "后台双击失败")
+                    return True
                 if x is not None and y is not None:
                     pyautogui.doubleClick(x=x, y=y)
                 else:
                     pyautogui.doubleClick()
             
             elif self.action_type == ActionType.MOUSE_RIGHT_CLICK:
+                clicker = self._background_input()
+                if clicker:
+                    bx, by = self._background_client_coords(x, y)
+                    result = clicker.click(bx, by, button='right', background=True)
+                    if not result.success:
+                        raise Exception(result.message or "后台右键失败")
+                    return True
                 if x is not None and y is not None:
                     pyautogui.rightClick(x=x, y=y)
                 else:
                     pyautogui.rightClick()
             
             elif self.action_type == ActionType.MOUSE_MOVE:
+                clicker = self._background_input()
+                if clicker:
+                    bx, by = self._background_client_coords(x, y)
+                    result = clicker.move(bx, by, background=True)
+                    if not result.success:
+                        raise Exception(result.message or "后台移动失败")
+                    return True
                 pyautogui.moveTo(x=x, y=y, duration=self.params.get('duration', 0.0))
             
             elif self.action_type == ActionType.MOUSE_DRAG:
@@ -323,6 +376,14 @@ class Action:
                 start_y = self.params.get('start_y', 0)
                 end_x = self.params.get('end_x', 0)
                 end_y = self.params.get('end_y', 0)
+                clicker = self._background_input()
+                if clicker:
+                    start_x, start_y = self._background_client_coords(start_x, start_y)
+                    end_x, end_y = self._background_client_coords(end_x, end_y)
+                    result = clicker.drag(start_x, start_y, end_x, end_y, background=True)
+                    if not result.success:
+                        raise Exception(result.message or "后台拖拽失败")
+                    return True
                 if window_offset:
                     start_x += window_offset[0]
                     start_y += window_offset[1]
@@ -332,16 +393,41 @@ class Action:
                 pyautogui.drag(end_x - start_x, end_y - start_y, duration=self.params.get('duration', 0.5))
             
             elif self.action_type == ActionType.MOUSE_SCROLL:
+                clicker = self._background_input()
+                if clicker:
+                    bx, by = self._background_client_coords(x, y)
+                    result = clicker.scroll_background(bx, by, self.params.get('clicks', 0))
+                    if not result.success:
+                        raise Exception(result.message or "后台滚动失败")
+                    return True
                 pyautogui.scroll(self.params.get('clicks', 0), x=x, y=y)
             
             elif self.action_type == ActionType.KEY_PRESS:
+                clicker = self._background_input()
+                if clicker:
+                    result = clicker.key_press(self.params.get('key', ''))
+                    if not result.success:
+                        raise Exception(result.message or "后台按键失败")
+                    return True
                 pyautogui.press(self.params.get('key', ''))
             
             elif self.action_type == ActionType.KEY_TYPE:
+                clicker = self._background_input()
+                if clicker:
+                    result = clicker.type_text(self.params.get('text', ''))
+                    if not result.success:
+                        raise Exception(result.message or "后台输入失败")
+                    return True
                 pyautogui.typewrite(self.params.get('text', ''), interval=self.params.get('interval', 0.0))
             
             elif self.action_type == ActionType.HOTKEY:
                 keys = self.params.get('keys', [])
+                clicker = self._background_input()
+                if clicker:
+                    result = clicker.hotkey(keys)
+                    if not result.success:
+                        raise Exception(result.message or "后台快捷键失败")
+                    return True
                 if keys:
                     pyautogui.hotkey(*keys)
             
@@ -583,15 +669,9 @@ class Action:
                     if group_action.action_type in [ActionType.MOUSE_CLICK_RELATIVE, ActionType.MOUSE_MOVE_RELATIVE]:
                         group_action.use_relative_coords = True
 
-                    if self.background_mode and group_action.action_type in [
-                        ActionType.MOUSE_CLICK_RELATIVE,
-                        ActionType.MOUSE_MOVE_RELATIVE,
-                        ActionType.IMAGE_CLICK,
-                        ActionType.IMAGE_WAIT_CLICK,
-                        ActionType.IMAGE_CHECK,
-                        ActionType.SCREENSHOT,
+                    if self.background_mode and group_action.action_type in OFFSCREEN_BACKGROUND_ACTION_TYPES | {
                         ActionType.ACTION_GROUP_REF,
-                    ]:
+                    }:
                         group_action.background_mode = True
                     
                     if self.window_title and not group_action.window_title:

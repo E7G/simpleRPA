@@ -6,6 +6,7 @@ from typing import List, Optional, Tuple
 
 
 user32 = ctypes.windll.user32 if sys.platform == 'win32' else None
+GWL_STYLE = -16
 GWL_EXSTYLE = -20
 WS_EX_APPWINDOW = 0x00040000
 WS_EX_TOOLWINDOW = 0x00000080
@@ -253,8 +254,13 @@ class WindowUtils:
 
         try:
             if visible:
-                user32.SetWindowLongPtrW(hwnd, GWL_EXSTYLE, WS_EX_APPWINDOW)
-                win32gui.ShowWindow(hwnd, win32con.SW_SHOW)
+                current_exstyle = user32.GetWindowLongPtrW(hwnd, GWL_EXSTYLE)
+                user32.SetWindowLongPtrW(
+                    hwnd,
+                    GWL_EXSTYLE,
+                    (current_exstyle | WS_EX_APPWINDOW) & ~WS_EX_TOOLWINDOW,
+                )
+                win32gui.ShowWindow(hwnd, win32con.SW_SHOWNOACTIVATE)
                 win32gui.UpdateWindow(hwnd)
                 return {'method': 'style', 'removed': False}
 
@@ -262,9 +268,12 @@ class WindowUtils:
             original_exstyle = user32.GetWindowLongPtrW(hwnd, GWL_EXSTYLE)
 
             win32gui.ShowWindow(hwnd, win32con.SW_HIDE)
-            user32.SetWindowLongPtrW(hwnd, GWL_EXSTYLE, WS_EX_TOOLWINDOW)
-            user32.SetWindowLongPtrW(hwnd, GWL_STYLE, win32con.WS_POPUP)
-            win32gui.ShowWindow(hwnd, win32con.SW_SHOW)
+            user32.SetWindowLongPtrW(
+                hwnd,
+                GWL_EXSTYLE,
+                (original_exstyle | WS_EX_TOOLWINDOW) & ~WS_EX_APPWINDOW,
+            )
+            win32gui.ShowWindow(hwnd, win32con.SW_SHOWNOACTIVATE)
             win32gui.UpdateWindow(hwnd)
             return {'method': 'style', 'removed': True, 'exstyle': original_exstyle, 'style': original_style}
         except Exception:

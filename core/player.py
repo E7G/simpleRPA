@@ -6,7 +6,7 @@ from typing import List, Callable, Optional, Tuple
 
 from enum import Enum
 
-from .actions import Action, ActionType
+from .actions import Action, ActionType, can_actions_run_offscreen
 
 
 
@@ -351,6 +351,13 @@ class Player:
 
         if self._window_run_mode == "normal":
             return True, ""
+
+        if self._window_run_mode in ("offscreen", "offscreen_hidden_taskbar"):
+            if not can_actions_run_offscreen(
+                self.actions,
+                local_group_manager=self._local_group_manager,
+            ):
+                return False, "离屏后台运行失败: 脚本包含未启用后台模式或依赖前台输入的动作"
 
 
 
@@ -1044,6 +1051,9 @@ class Player:
                     action._runtime_window_hwnd = self._window_hwnd
 
                 action._runtime_speed = self.speed
+                runtime_background_mode = action.background_mode
+                if self._window_run_mode != "normal" and self._window_hwnd:
+                    action.background_mode = True
 
                 
 
@@ -1060,6 +1070,7 @@ class Player:
                     self._emit('on_action_end', action, i, False)
 
                 finally:
+                    action.background_mode = runtime_background_mode
 
                     if hasattr(action, '_on_sub_action_start'):
 

@@ -1203,18 +1203,35 @@ class MainWindow(MSFluentWindow):
             ]:
                 target_action.window_title = window_title
 
-        offscreen_requested = bool(selected_hwnd and self._offscreen_cb.isChecked())
-        offscreen_supported = can_actions_run_offscreen([target_action], local_group_manager=player.get_local_group_manager()) if offscreen_requested else False
+        # AI/background actions already know how to capture and click a bound
+        # window without foreground activation. Keep them in place and do not
+        # move/hide/activate the target window. The legacy "离屏后台" checkbox
+        # remains available for scripts that explicitly want off-screen relocation.
+        background_action = bool(target_action.background_mode)
+        offscreen_requested = bool(
+            selected_hwnd and self._offscreen_cb.isChecked() and not background_action
+        )
+        offscreen_supported = (
+            can_actions_run_offscreen(
+                [target_action],
+                local_group_manager=player.get_local_group_manager(),
+            )
+            if offscreen_requested
+            else background_action
+        )
         offscreen_enabled = offscreen_requested
+
         if offscreen_enabled:
             run_mode = "offscreen_hidden_taskbar"
         else:
             run_mode = "normal"
         player.set_window_run_mode(run_mode)
+
         if offscreen_requested and not offscreen_supported:
             self._status_label.setText("已强制启用离屏后台；当前动作可能仍依赖前台。")
 
-        if selected_hwnd and not offscreen_enabled:
+        # Crucial: a background action must never steal focus from the user.
+        if selected_hwnd and not offscreen_enabled and not background_action:
             self._window_utils.activate_window(selected_hwnd)
 
         # 进入单步调试运行状态：让右上角按钮可暂停/停止；

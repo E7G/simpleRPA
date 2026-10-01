@@ -794,6 +794,27 @@ class Action:
                     _, clicker, origin = self._capture_ai_frame(pyautogui)
                     return self._ai_click(pyautogui, px, py, clicker=clicker, origin=origin)
 
+                correction_queue = getattr(self, '_ai_correction_queue', None)
+
+                def pull_corrections():
+                    items = []
+                    if correction_queue is None:
+                        return items
+                    while True:
+                        try:
+                            items.append(correction_queue.get_nowait())
+                        except Exception:
+                            break
+                    return items
+
+                def emit_trace(kind, message):
+                    callback = getattr(self, '_on_ai_trace', None)
+                    if callback:
+                        try:
+                            callback(kind, message)
+                        except Exception:
+                            pass
+
                 cleanup_steps = int(self.params.get('cleanup_steps', 4))
                 long_running = bool(int(self.params.get('long_running', 1)))
 
@@ -805,6 +826,8 @@ class Action:
                             goal="只清理挡住当前操作的公告、活动说明、普通提示和遮挡层；页面已经可操作就停止，不要离开当前业务页面",
                             should_stop=should_stop,
                             max_steps=cleanup_steps,
+                            correction_source=pull_corrections,
+                            event_callback=emit_trace,
                         )
                     except Exception as exc:
                         if should_stop and should_stop():
@@ -826,6 +849,8 @@ class Action:
                         self.params.get('max_runtime_minutes', 360)
                     ),
                     retry_limit=int(self.params.get('retry_limit', 10)),
+                    correction_source=pull_corrections,
+                    event_callback=emit_trace,
                 )
 
                 if int(self.params.get('return_home', 1)) != 0:
@@ -836,6 +861,8 @@ class Action:
                             goal="当前业务任务已经完成。关闭结果弹窗或普通提示，并逐级点击返回/首页/大厅，直到回到主界面",
                             should_stop=should_stop,
                             max_steps=max(cleanup_steps, 6),
+                            correction_source=pull_corrections,
+                            event_callback=emit_trace,
                         )
                     except Exception as exc:
                         if should_stop and should_stop():

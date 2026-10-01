@@ -344,7 +344,7 @@ class Player:
 
 
 
-    def _prepare_window_for_run(self) -> Tuple[bool, str]:
+    def _prepare_window_for_run(self, actions_override=None) -> Tuple[bool, str]:
 
         if self._window_prepared:
             return True, ""
@@ -353,8 +353,9 @@ class Player:
             return True, ""
 
         if self._window_run_mode in ("offscreen", "offscreen_hidden_taskbar"):
+            actions_to_check = self.actions if actions_override is None else actions_override
             if not can_actions_run_offscreen(
-                self.actions,
+                actions_to_check,
                 local_group_manager=self._local_group_manager,
             ):
                 return False, "离屏后台运行失败: 脚本包含未启用后台模式或依赖前台输入的动作"
@@ -802,6 +803,14 @@ class Player:
             self.state = PlayerState.IDLE
         return True
 
+    def _should_stop_action(self) -> bool:
+        """Pause-aware stop callback passed into long-running actions."""
+        while not self._pause_event.is_set():
+            if self._stop_flag:
+                return True
+            time.sleep(0.05)
+        return bool(self._stop_flag)
+
     def _interruptible_sleep(self, seconds: float):
 
         end_time = time.time() + seconds
@@ -1059,7 +1068,7 @@ class Player:
 
                 try:
 
-                    success = action.execute(window_offset=current_offset, should_stop=lambda: self._stop_flag, local_group_manager=self._local_group_manager)
+                    success = action.execute(window_offset=current_offset, should_stop=self._should_stop_action, local_group_manager=self._local_group_manager)
 
                     self._emit('on_action_end', action, i, success)
 
@@ -1182,6 +1191,11 @@ class Player:
 
         try:
 
+            prepared, prepare_error = self._prepare_window_for_run([action])
+            if not prepared:
+                self._emit('on_window_error', action, index, prepare_error)
+                return False
+
             if self._window_hwnd:
 
                 action._runtime_window_hwnd = self._window_hwnd
@@ -1244,7 +1258,7 @@ class Player:
 
             try:
 
-                success = action.execute(window_offset=current_offset, should_stop=lambda: self._stop_flag, local_group_manager=self._local_group_manager)
+                success = action.execute(window_offset=current_offset, should_stop=self._should_stop_action, local_group_manager=self._local_group_manager)
 
                 self._emit('on_action_end', action, index, success)
 

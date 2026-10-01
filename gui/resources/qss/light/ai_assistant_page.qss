@@ -1,0 +1,37 @@
+AIAssistantPage,
+AIToolBar,
+#view {
+    background-color: transparent;
+}
+
+QScrollArea {
+    border: none;
+}
+
+AIToolBar > CaptionLabel {
+    color: rgb(95, 95, 95);
+}
+
+ExampleCard {
+    background-color: transparent;
+}
+
+TitleLabel,
+StrongBodyLabel {
+    color: black;
+}
+
+ExampleCard > #card {
+    border: 1px solid rgba(0, 0, 0, 0.05);
+    border-radius: 10px;
+    background-color: rgba(0, 0, 0, 0.024);
+}
+
+ExampleCard > #card QLabel {
+    font: 14px 'Segoe UI', 'Microsoft YaHei', 'PingFang SC';
+    color: black;
+}
+
+ExampleCard > #card InfoBadge {
+    font-size: 11px;
+}

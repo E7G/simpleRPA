@@ -45,6 +45,7 @@ class ActionPanel(QWidget):
             '其他': '📷',
             '窗口操作': '🪟',
             '图像识别': '🖼',
+            'AI视觉': '🤖',
         }
         self._rebuild_tree()
     

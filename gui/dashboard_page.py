@@ -1996,6 +1996,7 @@ class DashboardPage(QWidget):
         self._offscreen_cb = CheckBox("离屏后台")
 
         self._offscreen_cb.setToolTip("把目标窗口移到屏幕外并隐藏任务栏图标，结束后自动恢复")
+        self._offscreen_cb.toggled.connect(self._on_offscreen_mode_changed)
 
         right_side.addWidget(self._offscreen_cb)
 
@@ -2286,6 +2287,13 @@ class DashboardPage(QWidget):
         self._stop_signal.connect(self._on_stop_gui)
 
 
+
+    def _on_offscreen_mode_changed(self, checked):
+        self._config.run_window_offscreen = bool(checked)
+        try:
+            self._config.save()
+        except Exception:
+            pass
 
     def _open_schedule_settings(self):
 

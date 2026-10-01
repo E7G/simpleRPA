@@ -1,6 +1,7 @@
 import sys
 import os
 import threading
+import queue
 import webbrowser
 from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout,
@@ -21,6 +22,7 @@ from core.actions import Action, ActionManager, ActionType, can_actions_run_offs
 from core.player import Player, PlayerState
 from core.exporter import Exporter
 from core.action_group import LocalActionGroupManager
+from core.vision.example_knowledge import get_reference_labels
 from utils.config import Config
 from utils.window_utils import WindowUtils, WindowInfo
 from utils.update_checker import UpdateChecker
@@ -30,6 +32,8 @@ from .action_panel import ActionPanel
 from .script_editor import ScriptEditor
 from .property_panel import PropertyPanel
 from .recorder_panel import RecorderPanel
+from .ai_chat_panel import AIChatPanel
+from .ai_assistant_page import AIAssistantPage
 from .widgets import WindowSelector
 from .command_panel import CommandManagerWidget
 from .dashboard_page import DashboardPage
@@ -51,6 +55,7 @@ class MainWindow(MSFluentWindow):
     _update_action_start_signal = pyqtSignal(object, int, str)
     _update_available_signal = pyqtSignal(object)
     _update_window_error_signal = pyqtSignal(object, int, str)
+    _ai_trace_signal = pyqtSignal(str, str)
     
     def __init__(self):
         super().__init__()
@@ -73,6 +78,7 @@ class MainWindow(MSFluentWindow):
         self._setup_navigation()
         self._setup_connections()
         self._load_settings()
+        QTimer.singleShot(0, lambda: self.switchTo(self.aiInterface))
         
         self._mouse_pos_timer = QTimer(self)
         self._mouse_pos_timer.timeout.connect(self._update_mouse_position)
@@ -86,6 +92,7 @@ class MainWindow(MSFluentWindow):
         self._update_action_start_signal.connect(self._on_player_action_start_gui)
         self._update_available_signal.connect(self._on_update_available)
         self._update_window_error_signal.connect(self._on_window_error_gui)
+        self._ai_trace_signal.connect(self._on_ai_trace_gui)
         
         self._update_checker = UpdateChecker(APP_VERSION)
         self._check_for_update()
@@ -133,6 +140,15 @@ class MainWindow(MSFluentWindow):
         self.setWindowTitle("SimpleRPA")
         self.setMinimumSize(1280, 850)
         
+        self.aiInterface = AIAssistantPage()
+        self.aiInterface.setObjectName('aiInterface')
+        self.addSubInterface(
+            self.aiInterface,
+            FluentIcon.APPLICATION,
+            'AI 助手',
+            isTransparent=True,
+        )
+
         self.dashboardInterface = DashboardPage()
         self.dashboardInterface.setObjectName('dashboardInterface')
         self.addSubInterface(
@@ -182,6 +198,7 @@ class MainWindow(MSFluentWindow):
         
         self._offscreen_cb = CheckBox("离屏后台(隐藏图标)")
         self._offscreen_cb.setToolTip("把目标窗口移到屏幕外并隐藏任务栏图标，结束后自动恢复")
+        self._offscreen_cb.toggled.connect(self._on_offscreen_mode_changed)
         tb.addWidget(self._offscreen_cb)
         
         tb.addStretch()
@@ -214,18 +231,21 @@ class MainWindow(MSFluentWindow):
         
         self._action_panel = ActionPanel()
         self._recorder_panel = RecorderPanel()
-        for panel in (self._action_panel, self._recorder_panel):
+        self._ai_chat_panel = AIChatPanel()
+        for panel in (self._action_panel, self._recorder_panel, self._ai_chat_panel):
             panel.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
 
         self._left_stack = QStackedWidget()
         self._left_stack.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self._left_stack.addWidget(self._action_panel)
         self._left_stack.addWidget(self._recorder_panel)
+        self._left_stack.addWidget(self._ai_chat_panel)
         left_panel.content_layout.addWidget(self._left_stack, 1)
 
         self._left_segment = SegmentedWidget(self.homeInterface)
         self._left_segment.addItem('actions', '操作库', lambda: self._show_left_panel('actions'))
         self._left_segment.addItem('recorder', '录制', lambda: self._show_left_panel('recorder'))
+        self._left_segment.addItem('ai', 'AI 对话', lambda: self._show_left_panel('ai'))
         self._left_segment.currentItemChanged.connect(self._show_left_panel)
         left_panel.add_header_widget(self._left_segment)
         self._left_segment.blockSignals(True)
@@ -280,6 +300,8 @@ class MainWindow(MSFluentWindow):
             return
         if key == 'recorder':
             self._left_stack.setCurrentWidget(self._recorder_panel)
+        elif key == 'ai':
+            self._left_stack.setCurrentWidget(self._ai_chat_panel)
         else:
             self._left_stack.setCurrentWidget(self._action_panel)
     
@@ -318,6 +340,10 @@ class MainWindow(MSFluentWindow):
     
     def _setup_connections(self):
         self._action_panel.action_added.connect(self._on_action_added)
+        self._ai_chat_panel.task_submitted.connect(self._on_ai_chat_task)
+        self.aiInterface.task_requested.connect(self._on_ai_assistant_task)
+        self.aiInterface.stop_requested.connect(self._stop_script)
+        self.aiInterface.window_selected.connect(self._on_ai_assistant_window_selected)
         self._script_editor.action_selected.connect(self._on_action_selected)
         self._script_editor.actions_changed.connect(self._on_actions_changed)
         self._script_editor.execute_single.connect(self._on_execute_single)
@@ -345,6 +371,15 @@ class MainWindow(MSFluentWindow):
     def _on_window_selected(self, hwnd):
         offset = self._window_selector.get_window_offset()
         self._property_panel.set_window_offset(offset)
+
+    def _on_ai_assistant_window_selected(self, hwnd):
+        """Keep the hidden advanced designer bound to the AI page target window."""
+        self._window_selector.refresh_windows()
+        combo = self._window_selector._window_combo
+        for i in range(combo.count()):
+            if combo.itemData(i) == hwnd:
+                combo.setCurrentIndex(i)
+                break
     
     def _create_player_for_tab(self, route_key: str):
         if not route_key:
@@ -494,6 +529,13 @@ class MainWindow(MSFluentWindow):
                 if route_key:
                     self._tab_files[route_key] = filepath
     
+    def _on_offscreen_mode_changed(self, checked):
+        self._config.run_window_offscreen = bool(checked)
+        try:
+            self._config.save()
+        except Exception:
+            pass
+
     def _save_settings(self):
         geometry = self.geometry()
         self._config.set_window_geometry(
@@ -793,6 +835,24 @@ class MainWindow(MSFluentWindow):
             if hasattr(self.dashboardInterface, 'export_python'):
                 self.dashboardInterface.export_python()
                 return
+
+        actions = self._script_editor.get_actions()
+        ai_types = {
+            ActionType.AI_VISUAL_CLICK,
+            ActionType.AI_VISUAL_CHECK,
+            ActionType.AI_VISUAL_NAVIGATE,
+            ActionType.AI_VISUAL_TASK,
+        }
+        if any(action.action_type in ai_types for action in actions):
+            box = MessageBox(
+                'AI视觉脚本暂不支持独立Python导出',
+                '当前流程包含 Agnes AI 视觉动作。请保存为 .rpa.json 后在 simpleRPA 中运行，避免导出时静默丢失 AI 步骤。',
+                self
+            )
+            box.yesButton.setText('确定')
+            box.cancelButton.hide()
+            box.exec()
+            return
         
         filepath, _ = QFileDialog.getSaveFileName(
             self, "导出Python脚本", "",
@@ -879,12 +939,33 @@ class MainWindow(MSFluentWindow):
         if selected_hwnd and not offscreen_enabled:
             self._window_utils.activate_window(selected_hwnd)
         
+        if hasattr(self, 'aiInterface'):
+            self.aiInterface.clear_trace()
+
         for action in actions:
+            if action.action_type == ActionType.AI_VISUAL_TASK:
+                action._ai_correction_queue = queue.Queue()
+                action._on_ai_trace = (
+                    lambda kind, message: self._ai_trace_signal.emit(
+                        str(kind),
+                        str(message),
+                    )
+                )
+
             if action.action_type in [ActionType.MOUSE_CLICK_RELATIVE, ActionType.MOUSE_MOVE_RELATIVE]:
                 action.use_relative_coords = True
             if action.background_mode and window_title:
                 action.window_title = window_title
-            if action.action_type in [ActionType.ACTION_GROUP_REF, ActionType.IMAGE_CLICK, ActionType.IMAGE_WAIT_CLICK, ActionType.IMAGE_CHECK] and window_title:
+            if action.action_type in [
+                ActionType.ACTION_GROUP_REF,
+                ActionType.IMAGE_CLICK,
+                ActionType.IMAGE_WAIT_CLICK,
+                ActionType.IMAGE_CHECK,
+                ActionType.AI_VISUAL_CLICK,
+                ActionType.AI_VISUAL_CHECK,
+                ActionType.AI_VISUAL_NAVIGATE,
+                ActionType.AI_VISUAL_TASK,
+            ] and window_title:
                 action.window_title = window_title
         
         self._run_btn.setEnabled(False)
@@ -939,6 +1020,9 @@ class MainWindow(MSFluentWindow):
         if player:
             player.stop()
             self._status_label.setText("已停止")
+            if hasattr(self, 'aiInterface'):
+                self.aiInterface.set_status("已停止")
+                self.aiInterface.append_assistant("任务已停止。")
             self._script_editor.clear_all_running()
             self._run_btn.setEnabled(True)
             self._pause_btn.setEnabled(False)
@@ -949,6 +1033,171 @@ class MainWindow(MSFluentWindow):
     def _on_action_added(self, action: Action):
         self._script_editor.add_action(action)
         self._set_current_tab_modified(True)
+
+    def _get_active_ai_long_action(self):
+        player = self._get_current_player()
+        if not player or player.state not in {PlayerState.PLAYING, PlayerState.PAUSED}:
+            return None
+
+        index = int(getattr(player, 'current_index', -1))
+        if index < 0 or index >= len(player.actions):
+            return None
+
+        action = player.actions[index]
+        if action.action_type != ActionType.AI_VISUAL_TASK:
+            return None
+        if int(action.params.get('long_running', 1)) == 0:
+            return None
+        return action
+
+    def _on_ai_trace_gui(self, kind: str, message: str):
+        if not hasattr(self, 'aiInterface'):
+            return
+
+        prefix = {
+            "start": "▶",
+            "observe": "👁",
+            "decision": "🧠",
+            "click": "🖱",
+            "wait": "⏳",
+            "recover": "↻",
+            "verify": "✓?",
+            "correction": "✎",
+            "done": "✓",
+            "stop": "■",
+        }.get(kind, "•")
+        self.aiInterface.append_trace(f"{prefix} {message}")
+
+        if kind == "recover":
+            self.aiInterface.set_status("长任务自动恢复中…", running=True)
+        elif kind == "correction":
+            self.aiInterface.set_status("长任务运行中 · 已应用新的指正", running=True)
+        elif kind == "done":
+            self.aiInterface.set_status("业务目标已完成，正在做收尾复核…", running=True)
+
+    def _on_ai_assistant_task(self, instruction: str, run_now: bool = False):
+        text = (instruction or "").strip()
+        if not text:
+            return
+
+        active_action = self._get_active_ai_long_action()
+        if active_action is not None:
+            correction_queue = getattr(active_action, '_ai_correction_queue', None)
+            if correction_queue is None:
+                correction_queue = queue.Queue()
+                active_action._ai_correction_queue = correction_queue
+            correction_queue.put(text)
+            self.aiInterface.append_assistant(
+                "已把这条内容作为当前长任务的中途指正，下一次视觉判断立即生效。"
+            )
+            self.aiInterface.append_trace(f"✎ 用户指正已排队：{text}")
+            self.aiInterface.set_status(
+                "长任务运行中 · 等待下一步应用指正",
+                running=True,
+            )
+            return
+
+        hwnd = self.aiInterface.get_selected_hwnd()
+        window_title = self.aiInterface.get_selected_title()
+        if not hwnd or not window_title:
+            self.aiInterface.set_status("请先选择目标窗口", error=True)
+            return
+
+        self._on_ai_assistant_window_selected(hwnd)
+
+        # Dashboard and main toolbar share the same persisted offscreen setting.
+        # Sync the visible toolbar checkbox before executing the AI task.
+        shared_offscreen = bool(self._config.run_window_offscreen)
+        if self._offscreen_cb.isChecked() != shared_offscreen:
+            self._offscreen_cb.blockSignals(True)
+            self._offscreen_cb.setChecked(shared_offscreen)
+            self._offscreen_cb.blockSignals(False)
+
+        options = self.aiInterface.get_task_options()
+        params = ActionManager.get_default_params(ActionType.AI_VISUAL_TASK)
+        params['instruction'] = text
+        params['prepare_navigation'] = options['prepare_navigation']
+        params['return_home'] = options['return_home']
+
+        action = Action(
+            action_type=ActionType.AI_VISUAL_TASK,
+            params=params,
+            window_title=window_title,
+            # AI Assistant tasks are background-only by design. Do not expose a
+            # foreground mode here: the preview is the user's live view.
+            background_mode=True,
+        )
+        self._script_editor.add_action(action)
+        self._set_current_tab_modified(True)
+
+        references = get_reference_labels(text)
+        if references:
+            self.aiInterface.append_assistant(
+                "已加载历史示例：" + "、".join(references)
+            )
+
+        self.aiInterface.append_assistant(
+            f"已生成后台长任务并绑定“{window_title}”。"
+            + (
+                " 将持续运行并自动恢复临时错误，直到任务真正完成或你主动停止。"
+                if run_now
+                else " 已加入高级流程。"
+            )
+        )
+
+        if run_now:
+            if not (os.getenv("AGNES_API_KEY") or os.getenv("AGNESAI_API_KEY")):
+                self.aiInterface.set_status("请先在右侧填写 Agnes API Key", error=True)
+                self.aiInterface.append_assistant("任务已生成，但尚未运行：Agnes API Key 未配置。")
+                return
+            index = len(self._script_editor.get_actions()) - 1
+            self.aiInterface.set_status("正在启动 AI 视觉任务…", running=True)
+            QTimer.singleShot(0, lambda idx=index: self._on_execute_single(idx))
+        else:
+            self.aiInterface.set_status("任务已加入流程")
+
+    def _on_ai_chat_task(self, instruction: str, run_now: bool = False):
+        text = (instruction or "").strip()
+        if not text:
+            return
+
+        normalized = text.replace(" ", "").replace("！", "").replace("!", "")
+        if normalized in {"撤销", "撤销上一条", "删除上一条", "删掉上一条"}:
+            actions = self._script_editor.get_actions()
+            if actions:
+                self._script_editor.remove_action(len(actions) - 1)
+                self._set_current_tab_modified(True)
+                self._ai_chat_panel.append_assistant("已撤销上一条流程动作。")
+            else:
+                self._ai_chat_panel.append_assistant("当前流程里没有可撤销的动作。")
+            return
+
+        params = ActionManager.get_default_params(ActionType.AI_VISUAL_TASK)
+        params['instruction'] = text
+
+        window_title = self._window_selector.get_selected_title()
+        action = Action(
+            action_type=ActionType.AI_VISUAL_TASK,
+            params=params,
+            window_title=window_title or None,
+            background_mode=bool(window_title),
+        )
+        self._script_editor.add_action(action)
+        self._set_current_tab_modified(True)
+
+        if window_title:
+            self._ai_chat_panel.append_assistant(
+                f"已生成 AI视觉任务，并绑定窗口“{window_title}”。"
+                "运行时会先自动清理普通公告/弹窗，完成后默认返回首页。"
+            )
+        else:
+            self._ai_chat_panel.append_assistant(
+                "已生成 AI视觉任务。当前未绑定窗口，建议先在顶部选择目标窗口再运行。"
+            )
+
+        if run_now:
+            index = len(self._script_editor.get_actions()) - 1
+            QTimer.singleShot(0, lambda idx=index: self._on_execute_single(idx))
     
     def _on_action_selected(self, action: Action):
         index = self._script_editor.get_selected_index()
@@ -1040,26 +1289,67 @@ class MainWindow(MSFluentWindow):
         # 否则 player 会沿用上一次运行时缓存的旧 hwnd（_window_offset_provider），
         # 导致换了新窗口后仍校验旧窗口、报“旧窗口不存在”。
         target_action = actions[index]
+
+        if target_action.action_type == ActionType.AI_VISUAL_TASK:
+            target_action._ai_correction_queue = queue.Queue()
+            target_action._on_ai_trace = (
+                lambda kind, message: self._ai_trace_signal.emit(
+                    str(kind),
+                    str(message),
+                )
+            )
+            if hasattr(self, 'aiInterface'):
+                self.aiInterface.clear_trace()
+                self.aiInterface.append_trace(
+                    "▶ Agent 会话已建立。执行过程中可直接在上方输入框发送指正。"
+                )
+
         if target_action.action_type in [ActionType.MOUSE_CLICK_RELATIVE, ActionType.MOUSE_MOVE_RELATIVE]:
             target_action.use_relative_coords = True
         if window_title:
             if target_action.background_mode:
                 target_action.window_title = window_title
-            if target_action.action_type in [ActionType.ACTION_GROUP_REF, ActionType.IMAGE_CLICK, ActionType.IMAGE_WAIT_CLICK, ActionType.IMAGE_CHECK]:
+            if target_action.action_type in [
+                ActionType.ACTION_GROUP_REF,
+                ActionType.IMAGE_CLICK,
+                ActionType.IMAGE_WAIT_CLICK,
+                ActionType.IMAGE_CHECK,
+                ActionType.AI_VISUAL_CLICK,
+                ActionType.AI_VISUAL_CHECK,
+                ActionType.AI_VISUAL_NAVIGATE,
+                ActionType.AI_VISUAL_TASK,
+            ]:
                 target_action.window_title = window_title
 
-        offscreen_requested = bool(selected_hwnd and self._offscreen_cb.isChecked())
-        offscreen_supported = can_actions_run_offscreen([target_action], local_group_manager=player.get_local_group_manager()) if offscreen_requested else False
+        # AI/background actions already know how to capture and click a bound
+        # window without foreground activation. Keep them in place and do not
+        # move/hide/activate the target window. The legacy "离屏后台" checkbox
+        # remains available for scripts that explicitly want off-screen relocation.
+        background_action = bool(target_action.background_mode)
+        offscreen_requested = bool(
+            selected_hwnd and self._config.run_window_offscreen
+        )
+        offscreen_supported = (
+            can_actions_run_offscreen(
+                [target_action],
+                local_group_manager=player.get_local_group_manager(),
+            )
+            if offscreen_requested
+            else background_action
+        )
         offscreen_enabled = offscreen_requested
+
         if offscreen_enabled:
             run_mode = "offscreen_hidden_taskbar"
         else:
             run_mode = "normal"
         player.set_window_run_mode(run_mode)
+
         if offscreen_requested and not offscreen_supported:
             self._status_label.setText("已强制启用离屏后台；当前动作可能仍依赖前台。")
 
-        if selected_hwnd and not offscreen_enabled:
+        # Crucial: a background action must never steal focus from the user.
+        if selected_hwnd and not offscreen_enabled and not background_action:
             self._window_utils.activate_window(selected_hwnd)
 
         # 进入单步调试运行状态：让右上角按钮可暂停/停止；
@@ -1110,6 +1400,22 @@ class MainWindow(MSFluentWindow):
                 repeat = player.current_repeat
                 total = player.repeat_count
                 self._status_label.setText(f"第 {repeat}/{total} 轮 | {desc} | 动作 {index + 1}/{total_actions}")
+
+            if hasattr(self, 'aiInterface') and action.action_type in {
+                ActionType.AI_VISUAL_CLICK,
+                ActionType.AI_VISUAL_CHECK,
+                ActionType.AI_VISUAL_NAVIGATE,
+                ActionType.AI_VISUAL_TASK,
+            }:
+                if action.action_type == ActionType.AI_VISUAL_TASK and int(
+                    action.params.get('long_running', 1)
+                ) != 0:
+                    self.aiInterface.set_status(
+                        f"长任务运行中：{desc}",
+                        running=True,
+                    )
+                else:
+                    self.aiInterface.set_status(f"正在执行：{desc}", running=True)
         
         current_route_key = self._script_editor.get_current_route_key()
         if route_key == current_route_key:
@@ -1205,12 +1511,26 @@ class MainWindow(MSFluentWindow):
             self._pause_btn.setEnabled(False)
             self._stop_btn.setEnabled(False)
             self._pause_btn.setText("暂停")
+
+            if hasattr(self, 'aiInterface'):
+                if success:
+                    self.aiInterface.set_status("任务完成")
+                    self.aiInterface.append_assistant("视觉任务执行完成。")
+                    try:
+                        self.aiInterface.refresh_preview()
+                    except Exception:
+                        pass
+                else:
+                    self.aiInterface.set_status("任务已停止或中断")
     
     def _on_player_error_gui(self, error: str, route_key: str):
         print(f"[执行错误] {error}")
         current_route_key = self._script_editor.get_current_route_key()
         if route_key == current_route_key:
             self._status_label.setText(f"执行错误: {error}")
+            if hasattr(self, 'aiInterface'):
+                self.aiInterface.set_status(f"执行错误：{error}", error=True)
+                self.aiInterface.append_assistant(f"执行失败：{error}")
     
     def _check_for_update(self):
         def check():

@@ -1,9 +1,10 @@
 import os
+import threading
 
 from PyQt5.QtWidgets import (
     QWidget, QFrame, QVBoxLayout, QHBoxLayout, QGridLayout, QSizePolicy
 )
-from PyQt5.QtCore import Qt, QSize, pyqtSignal
+from PyQt5.QtCore import Qt, QSize, QTimer, pyqtSignal
 from PyQt5.QtGui import QImage, QPixmap
 
 from qfluentwidgets import (
@@ -160,10 +161,20 @@ class PreviewPane(QWidget):
 
 class TargetPanel(QWidget):
     window_selected = pyqtSignal(object)
+    preview_result = pyqtSignal(object)
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self._last_preview = None
+        self._preview_busy = False
+        self._preview_failures = 0
+        self._live_page_active = True
+
+        self.preview_result.connect(self._on_preview_result)
+
+        self.liveTimer = QTimer(self)
+        self.liveTimer.setInterval(200)  # ~5 FPS; enough to follow RPA steps without heavy CPU use
+        self.liveTimer.timeout.connect(self._request_live_frame)
 
         self.vBoxLayout = QVBoxLayout(self)
         self.vBoxLayout.setContentsMargins(0, 0, 0, 0)
@@ -177,10 +188,18 @@ class TargetPanel(QWidget):
         self.windowSelector.refresh_windows()
         self.windowSelector.window_selected.connect(self._on_window_selected)
 
-        self.refreshButton = PushButton(FIF.SYNC, "刷新预览", self)
+        self.refreshButton = PushButton(FIF.SYNC, "立即刷新", self)
         self.refreshButton.clicked.connect(self.refresh_preview)
 
+        self.liveSwitch = SwitchButton(self)
+        self.liveSwitch.setChecked(True)
+        self.liveSwitch.checkedChanged.connect(self._on_live_toggled)
+
+        self.liveLabel = CaptionLabel("实时预览", self)
+
         top.addWidget(self.windowSelector, 1)
+        top.addWidget(self.liveLabel)
+        top.addWidget(self.liveSwitch)
         top.addWidget(self.refreshButton)
 
         self.previewPane = PreviewPane(self)
@@ -202,17 +221,69 @@ class TargetPanel(QWidget):
 
     def _on_window_selected(self, hwnd):
         title = self.get_selected_title()
-        self.stateLabel.setText(f"已选择：{title or hwnd}")
+        self.stateLabel.setText(f"实时预览：{title or hwnd}")
         self.window_selected.emit(hwnd)
-        self.refresh_preview()
+        self._preview_failures = 0
+        self._update_live_timer()
+        self._request_live_frame(force=True)
+
+    def _on_live_toggled(self, checked):
+        self._update_live_timer()
+        if checked:
+            self._request_live_frame(force=True)
+
+    def set_live_page_active(self, active: bool):
+        self._live_page_active = bool(active)
+        self._update_live_timer()
+        if active and self.liveSwitch.isChecked():
+            self._request_live_frame(force=True)
+
+    def _update_live_timer(self):
+        should_run = bool(
+            self._live_page_active
+            and self.liveSwitch.isChecked()
+            and self.get_selected_hwnd()
+        )
+        if should_run:
+            if not self.liveTimer.isActive():
+                self.liveTimer.start()
+        else:
+            self.liveTimer.stop()
 
     def refresh_preview(self):
+        self._request_live_frame(force=True)
+
+    def _request_live_frame(self, force=False):
         hwnd = self.get_selected_hwnd()
         if not hwnd:
+            self.liveTimer.stop()
             self._last_preview = None
             self.previewPane.clear_preview("请先选择目标窗口")
             return
 
+        if self._preview_busy:
+            return
+
+        if not force and (not self._live_page_active or not self.liveSwitch.isChecked()):
+            return
+
+        self._preview_busy = True
+        thread = threading.Thread(
+            target=self._capture_preview_worker,
+            args=(hwnd,),
+            daemon=True,
+            name="simpleRPA-live-preview",
+        )
+        thread.start()
+
+    def _capture_preview_worker(self, hwnd):
+        result = {
+            "hwnd": hwnd,
+            "image": None,
+            "width": 0,
+            "height": 0,
+            "error": None,
+        }
         try:
             from utils.background_click import create_background_clicker
 
@@ -222,7 +293,7 @@ class TargetPanel(QWidget):
 
             image = clicker.capture(background=True)
             if image is None:
-                raise RuntimeError("后台窗口截图失败（不会降级为前台截图）")
+                raise RuntimeError("后台窗口截图失败")
 
             rgb = image.convert("RGB")
             width, height = rgb.size
@@ -231,22 +302,37 @@ class TargetPanel(QWidget):
                 data, width, height, width * 3, QImage.Format_RGB888
             ).copy()
 
+            result["image"] = qimg
+            result["width"] = width
+            result["height"] = height
+        except Exception as exc:
+            result["error"] = str(exc)
+
+        self.preview_result.emit(result)
+
+    def _on_preview_result(self, result):
+        self._preview_busy = False
+
+        hwnd = result.get("hwnd")
+        if hwnd != self.get_selected_hwnd():
+            return
+
+        qimg = result.get("image")
+        if qimg is not None and not qimg.isNull():
+            self._preview_failures = 0
             self._last_preview = QPixmap.fromImage(qimg)
             self.previewPane.set_image(qimg)
+            fps = int(round(1000 / max(1, self.liveTimer.interval())))
             self.stateLabel.setText(
-                f"已捕获：{self.get_selected_title()} · {width}×{height}"
+                f"实时预览 · 约 {fps} FPS · {result.get('width')}×{result.get('height')} · "
+                f"{self.get_selected_title()}"
             )
-        except Exception as exc:
-            self._last_preview = None
-            self.previewPane.clear_preview("窗口预览失败")
-            InfoBar.error(
-                title="预览失败",
-                content=str(exc),
-                orient=Qt.Horizontal,
-                isClosable=True,
-                position=InfoBarPosition.TOP,
-                duration=3500,
-                parent=self.window(),
+            return
+
+        self._preview_failures += 1
+        if self._preview_failures >= 3:
+            self.stateLabel.setText(
+                f"实时预览暂时无法抓帧：{result.get('error') or '后台截图失败'}"
             )
 
 class TaskPanel(QWidget):
@@ -647,6 +733,14 @@ class AIAssistantPage(ScrollArea):
     def resizeEvent(self, event):
         super().resizeEvent(event)
         self.toolBar.resize(self.width(), self.toolBar.height())
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        self.targetPanel.set_live_page_active(True)
+
+    def hideEvent(self, event):
+        self.targetPanel.set_live_page_active(False)
+        super().hideEvent(event)
 
     def _on_submit(self, text, run_now):
         if not self.get_selected_hwnd():

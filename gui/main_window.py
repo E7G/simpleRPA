@@ -1064,8 +1064,12 @@ class MainWindow(MSFluentWindow):
             )
 
         self.aiInterface.append_assistant(
-            f"已生成后台任务并绑定“{window_title}”。"
-            + (" 准备立即执行。" if run_now else " 已加入高级流程。")
+            f"已生成后台长任务并绑定“{window_title}”。"
+            + (
+                " 将持续运行并自动恢复临时错误，直到任务真正完成或你主动停止。"
+                if run_now
+                else " 已加入高级流程。"
+            )
         )
 
         if run_now:
@@ -1315,7 +1319,15 @@ class MainWindow(MSFluentWindow):
                 ActionType.AI_VISUAL_NAVIGATE,
                 ActionType.AI_VISUAL_TASK,
             }:
-                self.aiInterface.set_status(f"正在执行：{desc}", running=True)
+                if action.action_type == ActionType.AI_VISUAL_TASK and int(
+                    action.params.get('long_running', 1)
+                ) != 0:
+                    self.aiInterface.set_status(
+                        f"长任务运行中：{desc}",
+                        running=True,
+                    )
+                else:
+                    self.aiInterface.set_status(f"正在执行：{desc}", running=True)
         
         current_route_key = self._script_editor.get_current_route_key()
         if route_key == current_route_key:

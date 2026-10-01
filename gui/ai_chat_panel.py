@@ -1,11 +1,14 @@
-from PyQt5.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QPlainTextEdit
+from PyQt5.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout
 from PyQt5.QtCore import pyqtSignal
 
-from qfluentwidgets import LineEdit, PushButton, PrimaryPushButton, CaptionLabel
+from qfluentwidgets import (
+    TextEdit, LineEdit, PushButton, PrimaryPushButton,
+    CaptionLabel, FluentIcon,
+)
 
 
 class AIChatPanel(QWidget):
-    """Minimal chat-style authoring surface for natural-language visual tasks."""
+    """Compact QFluentWidgets chat surface used by the advanced designer."""
 
     task_submitted = pyqtSignal(str, bool)  # instruction, run_now
 
@@ -24,7 +27,7 @@ class AIChatPanel(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(8)
 
-        self._history = QPlainTextEdit()
+        self._history = TextEdit(self)
         self._history.setReadOnly(True)
         self._history.setPlaceholderText("在这里用对话生成 AI 视觉任务")
         layout.addWidget(self._history, 1)
@@ -33,7 +36,7 @@ class AIChatPanel(QWidget):
         tip.setWordWrap(True)
         layout.addWidget(tip)
 
-        self._input = LineEdit()
+        self._input = LineEdit(self)
         self._input.setPlaceholderText("例如：领取签到奖励")
         self._input.setMinimumHeight(36)
         self._input.returnPressed.connect(self._submit_add)
@@ -42,11 +45,11 @@ class AIChatPanel(QWidget):
         buttons = QHBoxLayout()
         buttons.setSpacing(6)
 
-        self._add_btn = PrimaryPushButton("加入流程")
+        self._add_btn = PrimaryPushButton(FluentIcon.ADD, "加入流程")
         self._add_btn.clicked.connect(self._submit_add)
         buttons.addWidget(self._add_btn)
 
-        self._run_btn = PushButton("加入并运行")
+        self._run_btn = PushButton(FluentIcon.PLAY, "加入并运行")
         self._run_btn.clicked.connect(self._submit_run)
         buttons.addWidget(self._run_btn)
 
@@ -74,7 +77,7 @@ class AIChatPanel(QWidget):
         self.task_submitted.emit(text, True)
 
     def append_user(self, text: str):
-        self._history.appendPlainText(f"你：{text}\n")
+        self._history.append(f"你：{text}\n")
 
     def append_assistant(self, text: str):
-        self._history.appendPlainText(f"simpleRPA：{text}\n")
+        self._history.append(f"simpleRPA：{text}\n")

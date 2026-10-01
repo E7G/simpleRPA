@@ -884,7 +884,16 @@ class MainWindow(MSFluentWindow):
                 action.use_relative_coords = True
             if action.background_mode and window_title:
                 action.window_title = window_title
-            if action.action_type in [ActionType.ACTION_GROUP_REF, ActionType.IMAGE_CLICK, ActionType.IMAGE_WAIT_CLICK, ActionType.IMAGE_CHECK] and window_title:
+            if action.action_type in [
+                ActionType.ACTION_GROUP_REF,
+                ActionType.IMAGE_CLICK,
+                ActionType.IMAGE_WAIT_CLICK,
+                ActionType.IMAGE_CHECK,
+                ActionType.AI_VISUAL_CLICK,
+                ActionType.AI_VISUAL_CHECK,
+                ActionType.AI_VISUAL_NAVIGATE,
+                ActionType.AI_VISUAL_TASK,
+            ] and window_title:
                 action.window_title = window_title
         
         self._run_btn.setEnabled(False)
@@ -1045,7 +1054,16 @@ class MainWindow(MSFluentWindow):
         if window_title:
             if target_action.background_mode:
                 target_action.window_title = window_title
-            if target_action.action_type in [ActionType.ACTION_GROUP_REF, ActionType.IMAGE_CLICK, ActionType.IMAGE_WAIT_CLICK, ActionType.IMAGE_CHECK]:
+            if target_action.action_type in [
+                ActionType.ACTION_GROUP_REF,
+                ActionType.IMAGE_CLICK,
+                ActionType.IMAGE_WAIT_CLICK,
+                ActionType.IMAGE_CHECK,
+                ActionType.AI_VISUAL_CLICK,
+                ActionType.AI_VISUAL_CHECK,
+                ActionType.AI_VISUAL_NAVIGATE,
+                ActionType.AI_VISUAL_TASK,
+            ]:
                 target_action.window_title = window_title
 
         offscreen_requested = bool(selected_hwnd and self._offscreen_cb.isChecked())

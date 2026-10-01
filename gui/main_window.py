@@ -1061,7 +1061,7 @@ class MainWindow(MSFluentWindow):
         elif kind == "correction":
             self.aiInterface.set_status("长任务运行中 · 已应用新的指正", running=True)
         elif kind == "done":
-            self.aiInterface.set_status("长任务完成", running=False)
+            self.aiInterface.set_status("业务目标已完成，正在做收尾复核…", running=True)
 
     def _on_ai_assistant_task(self, instruction: str, run_now: bool = False):
         text = (instruction or "").strip()

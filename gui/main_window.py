@@ -30,6 +30,7 @@ from .action_panel import ActionPanel
 from .script_editor import ScriptEditor
 from .property_panel import PropertyPanel
 from .recorder_panel import RecorderPanel
+from .ai_chat_panel import AIChatPanel
 from .widgets import WindowSelector
 from .command_panel import CommandManagerWidget
 from .dashboard_page import DashboardPage
@@ -214,18 +215,21 @@ class MainWindow(MSFluentWindow):
         
         self._action_panel = ActionPanel()
         self._recorder_panel = RecorderPanel()
-        for panel in (self._action_panel, self._recorder_panel):
+        self._ai_chat_panel = AIChatPanel()
+        for panel in (self._action_panel, self._recorder_panel, self._ai_chat_panel):
             panel.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
 
         self._left_stack = QStackedWidget()
         self._left_stack.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self._left_stack.addWidget(self._action_panel)
         self._left_stack.addWidget(self._recorder_panel)
+        self._left_stack.addWidget(self._ai_chat_panel)
         left_panel.content_layout.addWidget(self._left_stack, 1)
 
         self._left_segment = SegmentedWidget(self.homeInterface)
         self._left_segment.addItem('actions', '操作库', lambda: self._show_left_panel('actions'))
         self._left_segment.addItem('recorder', '录制', lambda: self._show_left_panel('recorder'))
+        self._left_segment.addItem('ai', 'AI 对话', lambda: self._show_left_panel('ai'))
         self._left_segment.currentItemChanged.connect(self._show_left_panel)
         left_panel.add_header_widget(self._left_segment)
         self._left_segment.blockSignals(True)
@@ -280,6 +284,8 @@ class MainWindow(MSFluentWindow):
             return
         if key == 'recorder':
             self._left_stack.setCurrentWidget(self._recorder_panel)
+        elif key == 'ai':
+            self._left_stack.setCurrentWidget(self._ai_chat_panel)
         else:
             self._left_stack.setCurrentWidget(self._action_panel)
     
@@ -318,6 +324,7 @@ class MainWindow(MSFluentWindow):
     
     def _setup_connections(self):
         self._action_panel.action_added.connect(self._on_action_added)
+        self._ai_chat_panel.task_submitted.connect(self._on_ai_chat_task)
         self._script_editor.action_selected.connect(self._on_action_selected)
         self._script_editor.actions_changed.connect(self._on_actions_changed)
         self._script_editor.execute_single.connect(self._on_execute_single)
@@ -958,6 +965,49 @@ class MainWindow(MSFluentWindow):
     def _on_action_added(self, action: Action):
         self._script_editor.add_action(action)
         self._set_current_tab_modified(True)
+
+    def _on_ai_chat_task(self, instruction: str, run_now: bool = False):
+        text = (instruction or "").strip()
+        if not text:
+            return
+
+        normalized = text.replace(" ", "").replace("！", "").replace("!", "")
+        if normalized in {"撤销", "撤销上一条", "删除上一条", "删掉上一条"}:
+            actions = self._script_editor.get_actions()
+            if actions:
+                self._script_editor.remove_action(len(actions) - 1)
+                self._set_current_tab_modified(True)
+                self._ai_chat_panel.append_assistant("已撤销上一条流程动作。")
+            else:
+                self._ai_chat_panel.append_assistant("当前流程里没有可撤销的动作。")
+            return
+
+        params = ActionManager.get_default_params(ActionType.AI_VISUAL_TASK)
+        params['instruction'] = text
+
+        window_title = self._window_selector.get_selected_title()
+        action = Action(
+            action_type=ActionType.AI_VISUAL_TASK,
+            params=params,
+            window_title=window_title or None,
+            background_mode=bool(window_title),
+        )
+        self._script_editor.add_action(action)
+        self._set_current_tab_modified(True)
+
+        if window_title:
+            self._ai_chat_panel.append_assistant(
+                f"已生成 AI视觉任务，并绑定窗口“{window_title}”。"
+                "运行时会先自动清理普通公告/弹窗，完成后默认返回首页。"
+            )
+        else:
+            self._ai_chat_panel.append_assistant(
+                "已生成 AI视觉任务。当前未绑定窗口，建议先在顶部选择目标窗口再运行。"
+            )
+
+        if run_now:
+            index = len(self._script_editor.get_actions()) - 1
+            QTimer.singleShot(0, lambda idx=index: self._on_execute_single(idx))
     
     def _on_action_selected(self, action: Action):
         index = self._script_editor.get_selected_index()

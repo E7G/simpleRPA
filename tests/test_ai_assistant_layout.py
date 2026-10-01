@@ -4,12 +4,13 @@ import unittest
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PyQt5.QtWidgets import QApplication
+from PyQt5.QtGui import QImage
 from qfluentwidgets import (
     Theme, setTheme, ScrollArea, TextEdit,
     PasswordLineEdit, SwitchButton, PushButton,
 )
 
-from gui.ai_assistant_page import AIAssistantPage, ExampleCard, AIToolBar
+from gui.ai_assistant_page import AIAssistantPage, ExampleCard, AIToolBar, PreviewPane
 
 
 class AIAssistantLayoutTests(unittest.TestCase):
@@ -38,6 +39,17 @@ class AIAssistantLayoutTests(unittest.TestCase):
         self.assertIsInstance(page.settingsPanel.returnHomeSwitch, SwitchButton)
         self.assertIsInstance(page.settingsPanel.backgroundSwitch, SwitchButton)
         self.assertIsInstance(page.settingsPanel.themeButton, PushButton)
+        self.assertIsInstance(page.targetPanel.previewPane, PreviewPane)
+
+        # A normal 16:9 screenshot must be rendered as a genuinely large preview,
+        # not at the source/native ImageLabel size or as a tiny fixed widget.
+        image = QImage(1920, 1080, QImage.Format_RGB32)
+        image.fill(0xFF404040)
+        page.targetPanel.previewPane.set_image(image)
+        self.app.processEvents()
+        preview_size = page.targetPanel.previewPane.imageLabel.size()
+        self.assertGreaterEqual(preview_size.width(), 600)
+        self.assertGreaterEqual(preview_size.height(), 300)
 
         cards = [page.targetCard, page.taskCard, page.settingsCard]
         previous_bottom = -1

@@ -793,6 +793,16 @@ class Action:
                     _, clicker, origin = self._capture_ai_frame(pyautogui)
                     return self._ai_click(pyautogui, px, py, clicker=clicker, origin=origin)
 
+                cleanup_steps = int(self.params.get('cleanup_steps', 4))
+                if int(self.params.get('prepare_navigation', 1)) != 0:
+                    navigator.recover_safe_navigation(
+                        capture=capture,
+                        click=click_client,
+                        goal="只清理挡住当前操作的公告、活动说明、普通提示和遮挡层；页面已经可操作就停止，不要离开当前业务页面",
+                        should_stop=should_stop,
+                        max_steps=cleanup_steps,
+                    )
+
                 navigator.run(
                     instruction=instruction,
                     capture=capture,
@@ -801,6 +811,15 @@ class Action:
                     max_steps=int(self.params.get('max_steps', 10)),
                     settle_seconds=float(self.params.get('settle_seconds', 0.7)),
                 )
+
+                if int(self.params.get('return_home', 1)) != 0:
+                    navigator.recover_safe_navigation(
+                        capture=capture,
+                        click=click_client,
+                        goal="当前业务任务已经完成。关闭结果弹窗或普通提示，并逐级点击返回/首页/大厅，直到回到主界面",
+                        should_stop=should_stop,
+                        max_steps=cleanup_steps,
+                    )
 
             elif self.action_type == ActionType.ACTION_GROUP_REF:
                 from .action_group import ensure_action_group_available, GlobalActionGroupManager
@@ -1428,8 +1447,11 @@ class ActionManager:
             'name': 'AI视觉任务',
             'category': 'AI视觉',
             'params': [
-                {'name': 'instruction', 'type': 'str', 'default': '关闭公告并返回首页', 'description': '直接用自然语言描述完整任务'},
-                {'name': 'max_steps', 'type': 'int', 'default': 10, 'description': '最大视觉操作步骤数'},
+                {'name': 'instruction', 'type': 'str', 'default': '领取当前页面可以免费领取的奖励', 'description': '直接用自然语言描述完整任务'},
+                {'name': 'prepare_navigation', 'type': 'int', 'default': 1, 'description': '任务前自动关闭公告/普通弹窗(1开/0关)'},
+                {'name': 'return_home', 'type': 'int', 'default': 1, 'description': '任务完成后自动视觉返回首页(1开/0关)'},
+                {'name': 'cleanup_steps', 'type': 'int', 'default': 4, 'description': '任务前后页面整理最大步骤数'},
+                {'name': 'max_steps', 'type': 'int', 'default': 10, 'description': '业务任务最大视觉操作步骤数'},
                 {'name': 'settle_seconds', 'type': 'float', 'default': 0.7, 'description': '每次点击后等待界面稳定秒数'},
             ]
         },

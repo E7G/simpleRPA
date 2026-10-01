@@ -439,12 +439,12 @@ class AIAssistantPage(ScrollArea):
         self.taskCard.stop_requested.connect(self.stop_requested.emit)
         self.connectionCard.config_applied.connect(self._on_config_applied)
 
-        # Same theme wiring used by the official settings example.
-        try:
-            qconfig.themeChanged.disconnect(setTheme)
-        except Exception:
-            pass
-        qconfig.themeChanged.connect(setTheme)
+        # OptionsSettingCard updates qconfig.themeMode itself. Because this page
+        # uses the global qconfig item directly, refresh the Fluent stylesheet after
+        # the option changes (the official demo does this via its own cfg.themeChanged).
+        self.themeCard.optionChanged.connect(
+            lambda _: setTheme(qconfig.get(qconfig.themeMode))
+        )
 
     def _on_submit(self, text, run_now):
         if not self.get_selected_hwnd():

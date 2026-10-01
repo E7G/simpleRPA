@@ -316,7 +316,7 @@ class VisualNavigator:
                     )
 
                 transient_blocks += 1
-                if not long_running or transient_blocks > 4:
+                if not long_running or transient_blocks > retry_limit:
                     raise RuntimeError(
                         reason or "视觉模型判断当前任务无法继续"
                     )

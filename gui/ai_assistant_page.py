@@ -3,7 +3,7 @@ import os
 from PyQt5.QtWidgets import (
     QWidget, QFrame, QVBoxLayout, QHBoxLayout, QGridLayout, QSizePolicy
 )
-from PyQt5.QtCore import Qt, pyqtSignal
+from PyQt5.QtCore import Qt, QSize, pyqtSignal
 from PyQt5.QtGui import QImage, QPixmap
 
 from qfluentwidgets import (
@@ -91,6 +91,68 @@ class ExampleCard(QWidget):
         self.widget.show()
 
 
+class PreviewPane(QWidget):
+    """Large preview viewport that keeps QFluentWidgets ImageLabel from resizing the page."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._source = QImage()
+
+        self.setMinimumHeight(420)
+        self.setMaximumHeight(560)
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+
+        self.vBoxLayout = QVBoxLayout(self)
+        self.vBoxLayout.setContentsMargins(8, 8, 8, 8)
+        self.vBoxLayout.setSpacing(0)
+
+        self.placeholderLabel = CaptionLabel("选择目标窗口后显示大预览", self)
+        self.placeholderLabel.setAlignment(Qt.AlignCenter)
+
+        self.imageLabel = ImageLabel(self)
+        self.imageLabel.setAlignment(Qt.AlignCenter)
+        self.imageLabel.setBorderRadius(8, 8, 8, 8)
+        self.imageLabel.hide()
+
+        self.vBoxLayout.addWidget(self.placeholderLabel, 1, Qt.AlignCenter)
+        self.vBoxLayout.addWidget(self.imageLabel, 0, Qt.AlignCenter)
+
+    def clear_preview(self, text="选择目标窗口后显示大预览"):
+        self._source = QImage()
+        self.imageLabel.hide()
+        self.placeholderLabel.setText(text)
+        self.placeholderLabel.show()
+
+    def set_image(self, image: QImage):
+        self._source = image.copy()
+        self.placeholderLabel.hide()
+        self.imageLabel.show()
+        self.imageLabel.setImage(self._source)
+        self._fit_image()
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._fit_image()
+
+    def _fit_image(self):
+        if self._source.isNull() or not self.imageLabel.isVisible():
+            return
+
+        margins = self.vBoxLayout.contentsMargins()
+        available_w = max(1, self.width() - margins.left() - margins.right())
+        available_h = max(1, self.height() - margins.top() - margins.bottom())
+
+        image_w = max(1, self._source.width())
+        image_h = max(1, self._source.height())
+        scale = min(available_w / image_w, available_h / image_h)
+
+        fitted = QSize(
+            max(1, int(image_w * scale)),
+            max(1, int(image_h * scale)),
+        )
+        self.imageLabel.setScaledSize(fitted)
+
+
 class TargetPanel(QWidget):
     window_selected = pyqtSignal(object)
 
@@ -116,18 +178,15 @@ class TargetPanel(QWidget):
         top.addWidget(self.windowSelector, 1)
         top.addWidget(self.refreshButton)
 
-        self.previewLabel = ImageLabel(self)
-        self.previewLabel.setText("选择目标窗口后显示预览")
-        self.previewLabel.setAlignment(Qt.AlignCenter)
-        self.previewLabel.setMinimumHeight(220)
-        self.previewLabel.setMaximumHeight(300)
-        self.previewLabel.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self.previewPane = PreviewPane(self)
+        # Backward-compatible alias for code/tests that still reference previewLabel.
+        self.previewLabel = self.previewPane.imageLabel
 
         self.stateLabel = CaptionLabel("尚未选择窗口", self)
         self.stateLabel.setWordWrap(True)
 
         self.vBoxLayout.addLayout(top)
-        self.vBoxLayout.addWidget(self.previewLabel)
+        self.vBoxLayout.addWidget(self.previewPane)
         self.vBoxLayout.addWidget(self.stateLabel)
 
     def get_selected_hwnd(self):
@@ -146,8 +205,7 @@ class TargetPanel(QWidget):
         hwnd = self.get_selected_hwnd()
         if not hwnd:
             self._last_preview = None
-            self.previewLabel.clear()
-            self.previewLabel.setText("请先选择目标窗口")
+            self.previewPane.clear_preview("请先选择目标窗口")
             return
 
         try:
@@ -171,14 +229,13 @@ class TargetPanel(QWidget):
             ).copy()
 
             self._last_preview = QPixmap.fromImage(qimg)
-            self._update_preview_pixmap()
+            self.previewPane.set_image(qimg)
             self.stateLabel.setText(
                 f"已捕获：{self.get_selected_title()} · {width}×{height}"
             )
         except Exception as exc:
             self._last_preview = None
-            self.previewLabel.clear()
-            self.previewLabel.setText("窗口预览失败")
+            self.previewPane.clear_preview("窗口预览失败")
             InfoBar.error(
                 title="预览失败",
                 content=str(exc),
@@ -188,29 +245,6 @@ class TargetPanel(QWidget):
                 duration=3500,
                 parent=self.window(),
             )
-
-    def resizeEvent(self, event):
-        super().resizeEvent(event)
-        if self._last_preview is not None:
-            self._update_preview_pixmap()
-
-    def _update_preview_pixmap(self):
-        if self._last_preview is None:
-            return
-
-        target = self.previewLabel.size()
-        if target.width() <= 20 or target.height() <= 20:
-            return
-
-        self.previewLabel.setPixmap(
-            self._last_preview.scaled(
-                max(1, target.width() - 12),
-                max(1, target.height() - 12),
-                Qt.KeepAspectRatio,
-                Qt.SmoothTransformation,
-            )
-        )
-
 
 class TaskPanel(QWidget):
     submit_requested = pyqtSignal(str, bool)

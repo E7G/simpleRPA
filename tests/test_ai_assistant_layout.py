@@ -37,7 +37,6 @@ class AIAssistantLayoutTests(unittest.TestCase):
         self.assertIsInstance(page.taskPanel.inputEdit, TextEdit)
         self.assertIsInstance(page.settingsPanel.apiKeyEdit, PasswordLineEdit)
         self.assertIsInstance(page.settingsPanel.autoCleanupSwitch, SwitchButton)
-        self.assertIsInstance(page.settingsPanel.returnHomeSwitch, SwitchButton)
         self.assertIsInstance(page.settingsPanel.themeButton, PushButton)
         self.assertIsInstance(page.targetPanel.previewPane, PreviewPane)
         self.assertFalse(hasattr(page.targetPanel, "liveSwitch"))
@@ -81,7 +80,7 @@ class AIAssistantLayoutTests(unittest.TestCase):
         )
 
         self.assertTrue(page.settingsPanel.autoCleanupSwitch.isChecked())
-        self.assertTrue(page.settingsPanel.returnHomeSwitch.isChecked())
+        self.assertEqual(page.get_task_options()["return_home"], 0)
         self.assertTrue(page.get_task_options()["background_mode"])
 
         page.set_status("长任务运行中", running=True)

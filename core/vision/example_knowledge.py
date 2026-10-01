@@ -132,7 +132,18 @@ def _matching_script_paths(instruction: str, max_scripts: int = 4):
         return []
 
     text = (instruction or "").lower()
-    broad = any(word in text for word in BROAD_TASK_WORDS)
+    matched_groups = {
+        group_name
+        for group_name, keywords in SCRIPT_HINTS.items()
+        if any(keyword in text for keyword in keywords)
+    }
+    # Words such as “所有” often occur inside a specific task
+    # (“签到里所有免费奖励”). Only fan out to the whole daily routine
+    # when the user did not already name a concrete feature.
+    broad = (
+        any(word in text for word in BROAD_TASK_WORDS)
+        and not matched_groups
+    )
     scored = []
 
     for path in root.glob("*.rpa.json"):
@@ -143,7 +154,7 @@ def _matching_script_paths(instruction: str, max_scripts: int = 4):
 
         score = 0
         for group_name, keywords in SCRIPT_HINTS.items():
-            if any(keyword in text for keyword in keywords) and group_name.lower() in name:
+            if group_name in matched_groups and group_name.lower() in name:
                 score += 5
             elif broad and group_name.lower() in name:
                 score += 1
@@ -249,7 +260,18 @@ def select_example_context(instruction: str, max_examples: int = 4) -> str:
     text = (instruction or "").lower()
     scored: List[tuple] = []
 
+    specific_keywords = tuple(
+        kw
+        for item in EXAMPLES[:-1]
+        for kw in item["keywords"]
+    )
+    has_specific_task = any(kw.lower() in text for kw in specific_keywords)
+
     for index, item in enumerate(EXAMPLES):
+        # The last entry is the broad “daily rewards” flow. Do not inject it
+        # merely because a specific task contains words like “所有”.
+        if index == len(EXAMPLES) - 1 and has_specific_task:
+            continue
         score = sum(1 for kw in item["keywords"] if kw.lower() in text)
         if score:
             scored.append((score, -index, item))

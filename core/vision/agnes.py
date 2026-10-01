@@ -28,14 +28,6 @@ class AgnesVisionProvider:
     _rate_limit_until = 0.0
     _rate_limit_streak = 0
 
-
-    Environment variables:
-      AGNES_API_KEY / AGNESAI_API_KEY
-      AGNES_API_BASE (default: https://apihub.agnes-ai.com/v1)
-      AGNES_MODEL (default: agnes-3.0-flash)
-      AGNES_TIMEOUT (seconds)
-    """
-
     def __init__(
         self,
         api_key: Optional[str] = None,

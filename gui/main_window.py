@@ -993,6 +993,9 @@ class MainWindow(MSFluentWindow):
         if player:
             player.stop()
             self._status_label.setText("已停止")
+            if hasattr(self, 'aiInterface'):
+                self.aiInterface.set_status("已停止")
+                self.aiInterface.append_assistant("任务已停止。")
             self._script_editor.clear_all_running()
             self._run_btn.setEnabled(True)
             self._pause_btn.setEnabled(False)
@@ -1259,6 +1262,14 @@ class MainWindow(MSFluentWindow):
                 repeat = player.current_repeat
                 total = player.repeat_count
                 self._status_label.setText(f"第 {repeat}/{total} 轮 | {desc} | 动作 {index + 1}/{total_actions}")
+
+            if hasattr(self, 'aiInterface') and action.action_type in {
+                ActionType.AI_VISUAL_CLICK,
+                ActionType.AI_VISUAL_CHECK,
+                ActionType.AI_VISUAL_NAVIGATE,
+                ActionType.AI_VISUAL_TASK,
+            }:
+                self.aiInterface.set_status(f"正在执行：{desc}", running=True)
         
         current_route_key = self._script_editor.get_current_route_key()
         if route_key == current_route_key:
@@ -1354,12 +1365,26 @@ class MainWindow(MSFluentWindow):
             self._pause_btn.setEnabled(False)
             self._stop_btn.setEnabled(False)
             self._pause_btn.setText("暂停")
+
+            if hasattr(self, 'aiInterface'):
+                if success:
+                    self.aiInterface.set_status("任务完成")
+                    self.aiInterface.append_assistant("视觉任务执行完成。")
+                    try:
+                        self.aiInterface.refresh_preview()
+                    except Exception:
+                        pass
+                else:
+                    self.aiInterface.set_status("任务已停止或中断")
     
     def _on_player_error_gui(self, error: str, route_key: str):
         print(f"[执行错误] {error}")
         current_route_key = self._script_editor.get_current_route_key()
         if route_key == current_route_key:
             self._status_label.setText(f"执行错误: {error}")
+            if hasattr(self, 'aiInterface'):
+                self.aiInterface.set_status(f"执行错误：{error}", error=True)
+                self.aiInterface.append_assistant(f"执行失败：{error}")
     
     def _check_for_update(self):
         def check():

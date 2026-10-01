@@ -795,14 +795,24 @@ class Action:
                     return self._ai_click(pyautogui, px, py, clicker=clicker, origin=origin)
 
                 cleanup_steps = int(self.params.get('cleanup_steps', 4))
+                long_running = bool(int(self.params.get('long_running', 1)))
+
                 if int(self.params.get('prepare_navigation', 1)) != 0:
-                    navigator.recover_safe_navigation(
-                        capture=capture,
-                        click=click_client,
-                        goal="只清理挡住当前操作的公告、活动说明、普通提示和遮挡层；页面已经可操作就停止，不要离开当前业务页面",
-                        should_stop=should_stop,
-                        max_steps=cleanup_steps,
-                    )
+                    try:
+                        navigator.recover_safe_navigation(
+                            capture=capture,
+                            click=click_client,
+                            goal="只清理挡住当前操作的公告、活动说明、普通提示和遮挡层；页面已经可操作就停止，不要离开当前业务页面",
+                            should_stop=should_stop,
+                            max_steps=cleanup_steps,
+                        )
+                    except Exception as exc:
+                        if should_stop and should_stop():
+                            return False
+                        if long_running:
+                            print(f"[AI长任务] 前置页面整理未完成，继续主任务: {exc}")
+                        else:
+                            raise
 
                 navigator.run(
                     instruction=instruction,
@@ -811,7 +821,7 @@ class Action:
                     should_stop=should_stop,
                     max_steps=int(self.params.get('max_steps', 30)),
                     settle_seconds=float(self.params.get('settle_seconds', 0.7)),
-                    long_running=bool(int(self.params.get('long_running', 1))),
+                    long_running=long_running,
                     max_runtime_seconds=60.0 * float(
                         self.params.get('max_runtime_minutes', 120)
                     ),
@@ -819,13 +829,21 @@ class Action:
                 )
 
                 if int(self.params.get('return_home', 1)) != 0:
-                    navigator.recover_safe_navigation(
-                        capture=capture,
-                        click=click_client,
-                        goal="当前业务任务已经完成。关闭结果弹窗或普通提示，并逐级点击返回/首页/大厅，直到回到主界面",
-                        should_stop=should_stop,
-                        max_steps=cleanup_steps,
-                    )
+                    try:
+                        navigator.recover_safe_navigation(
+                            capture=capture,
+                            click=click_client,
+                            goal="当前业务任务已经完成。关闭结果弹窗或普通提示，并逐级点击返回/首页/大厅，直到回到主界面",
+                            should_stop=should_stop,
+                            max_steps=max(cleanup_steps, 6),
+                        )
+                    except Exception as exc:
+                        if should_stop and should_stop():
+                            return False
+                        if long_running:
+                            print(f"[AI长任务] 主任务已完成，但返回首页未完全成功: {exc}")
+                        else:
+                            raise
 
             elif self.action_type == ActionType.ACTION_GROUP_REF:
                 from .action_group import ensure_action_group_available, GlobalActionGroupManager

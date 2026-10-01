@@ -939,7 +939,19 @@ class MainWindow(MSFluentWindow):
         if selected_hwnd and not offscreen_enabled:
             self._window_utils.activate_window(selected_hwnd)
         
+        if hasattr(self, 'aiInterface'):
+            self.aiInterface.clear_trace()
+
         for action in actions:
+            if action.action_type == ActionType.AI_VISUAL_TASK:
+                action._ai_correction_queue = queue.Queue()
+                action._on_ai_trace = (
+                    lambda kind, message: self._ai_trace_signal.emit(
+                        str(kind),
+                        str(message),
+                    )
+                )
+
             if action.action_type in [ActionType.MOUSE_CLICK_RELATIVE, ActionType.MOUSE_MOVE_RELATIVE]:
                 action.use_relative_coords = True
             if action.background_mode and window_title:

@@ -1,14 +1,59 @@
 import time
+from collections import deque
 from typing import Callable, Optional
 
 from .agnes import AgnesVisionProvider
 
 
 class VisualNavigator:
-    """Bounded visual-agent loop used by AI visual actions."""
+    """Visual-agent loop with bounded short mode and resilient long-task mode."""
 
     def __init__(self, provider: Optional[AgnesVisionProvider] = None):
         self.provider = provider or AgnesVisionProvider()
+        self.last_session_state = {}
+
+    @staticmethod
+    def _sleep_interruptible(
+        seconds: float,
+        should_stop: Optional[Callable[[], bool]] = None,
+    ) -> bool:
+        end = time.monotonic() + max(0.0, float(seconds))
+        while time.monotonic() < end:
+            if should_stop and should_stop():
+                return False
+            time.sleep(min(0.1, max(0.0, end - time.monotonic())))
+        return True
+
+    @staticmethod
+    def _is_safety_block(reason: str) -> bool:
+        text = (reason or "").lower()
+        safety_words = (
+            "购买", "支付", "充值", "扣除", "消耗货币", "消费资源",
+            "删除数据", "账号安全", "敏感权限", "高风险",
+            "purchase", "payment", "recharge", "delete", "unsafe",
+        )
+        return any(word in text for word in safety_words)
+
+    def _update_state(
+        self,
+        *,
+        state: str,
+        step: int,
+        started_at: float,
+        instruction: str,
+        consecutive_errors: int = 0,
+        target: str = "",
+        reason: str = "",
+    ):
+        self.last_session_state = {
+            "state": state,
+            "step": step,
+            "elapsed_seconds": max(0.0, time.monotonic() - started_at),
+            "instruction": instruction,
+            "consecutive_errors": consecutive_errors,
+            "target": target,
+            "reason": reason,
+        }
 
     def run(
         self,
@@ -18,34 +63,154 @@ class VisualNavigator:
         should_stop: Optional[Callable[[], bool]] = None,
         max_steps: int = 8,
         settle_seconds: float = 0.7,
+        long_running: bool = False,
+        max_runtime_seconds: float = 7200,
+        retry_limit: int = 10,
     ) -> bool:
-        history = []
-        max_steps = max(1, min(int(max_steps), 40))
+        """Run a visual task.
+
+        Short mode keeps the traditional hard step limit. Long-running mode treats
+        max_steps as a checkpoint cadence only; it keeps running until the task is
+        done, the user stops it, the runtime budget expires, or repeated
+        unrecoverable errors exceed retry_limit.
+        """
+
+        history = deque(maxlen=12)
+        max_steps = max(1, min(int(max_steps), 100))
+        retry_limit = max(1, min(int(retry_limit), 50))
+        max_runtime_seconds = max(60.0, float(max_runtime_seconds or 7200))
+
         verify_done = any(
             keyword in (instruction or "")
             for keyword in ("签到", "奖励", "领取", "战令", "元宝树", "招募", "游戏圈")
         )
         done_confirmations = 0
+        consecutive_errors = 0
+        transient_blocks = 0
+        step = 0
+        started_at = time.monotonic()
 
-        for step in range(max_steps):
+        self._update_state(
+            state="running",
+            step=0,
+            started_at=started_at,
+            instruction=instruction,
+        )
+
+        while True:
             if should_stop and should_stop():
+                self._update_state(
+                    state="stopped",
+                    step=step,
+                    started_at=started_at,
+                    instruction=instruction,
+                )
                 return False
 
-            image = capture()
-            if image is None:
-                raise RuntimeError("AI视觉任务截图失败")
+            elapsed = time.monotonic() - started_at
+            if long_running:
+                if elapsed >= max_runtime_seconds:
+                    self._update_state(
+                        state="timeout",
+                        step=step,
+                        started_at=started_at,
+                        instruction=instruction,
+                        reason="长任务达到最大运行时间",
+                    )
+                    raise RuntimeError(
+                        f"AI长任务已持续 {elapsed / 60:.1f} 分钟，达到最大运行时间 "
+                        f"{max_runtime_seconds / 60:.0f} 分钟"
+                    )
+            elif step >= max_steps:
+                raise RuntimeError(
+                    f"AI视觉任务超过最大步骤数 {max_steps}，已停止以避免误操作"
+                )
 
-            context = "；".join(history[-4:])
-            decision = self.provider.next_action(image, instruction, context=context)
+            if long_running and step > 0 and step % max_steps == 0:
+                history.append(
+                    f"长任务检查点：已完成 {step} 个视觉循环并继续执行；"
+                    "不要因为步骤数较多而提前结束，只根据当前页面和任务完成条件判断。"
+                )
+
+            step += 1
+            context = "；".join(history)
+
+            try:
+                image = capture()
+                if image is None:
+                    raise RuntimeError("AI视觉任务截图失败")
+            except Exception as exc:
+                consecutive_errors += 1
+                self._update_state(
+                    state="recovering",
+                    step=step,
+                    started_at=started_at,
+                    instruction=instruction,
+                    consecutive_errors=consecutive_errors,
+                    reason=f"截图失败: {exc}",
+                )
+                if not long_running or consecutive_errors > retry_limit:
+                    raise RuntimeError(
+                        f"AI视觉任务连续截图失败 {consecutive_errors} 次: {exc}"
+                    ) from exc
+                history.append(
+                    f"第{step}步：后台截图临时失败，保持当前任务状态并重试。"
+                )
+                if not self._sleep_interruptible(
+                    min(3.0, 0.4 * consecutive_errors),
+                    should_stop,
+                ):
+                    return False
+                continue
+
+            try:
+                decision = self.provider.next_action(
+                    image,
+                    instruction,
+                    context=context,
+                )
+                consecutive_errors = 0
+            except Exception as exc:
+                consecutive_errors += 1
+                self._update_state(
+                    state="recovering",
+                    step=step,
+                    started_at=started_at,
+                    instruction=instruction,
+                    consecutive_errors=consecutive_errors,
+                    reason=f"视觉模型暂时失败: {exc}",
+                )
+                if not long_running or consecutive_errors > retry_limit:
+                    raise RuntimeError(
+                        f"AI视觉模型连续失败 {consecutive_errors} 次: {exc}"
+                    ) from exc
+
+                history.append(
+                    f"第{step}步：视觉模型请求/解析临时失败，保持当前页面和任务上下文，"
+                    "稍后继续，不要重新开始任务。"
+                )
+                if not self._sleep_interruptible(
+                    min(6.0, 0.7 * consecutive_errors),
+                    should_stop,
+                ):
+                    return False
+                continue
+
             status = str(decision.get("status", "")).lower()
             action = str(decision.get("action", "")).lower()
             target = str(decision.get("target", "")).strip()
             reason = str(decision.get("reason", "")).strip()
 
+            self._update_state(
+                state="running",
+                step=step,
+                started_at=started_at,
+                instruction=instruction,
+                target=target,
+                reason=reason,
+            )
+
             if status == "done":
-                # Sign-in pages have a recurring failure mode where D1~D3 are
-                # already claimed but D4 remains bright. Before accepting done,
-                # explicitly inspect D4 with a focused visual query.
                 if "签到" in (instruction or "") and hasattr(self.provider, "check"):
                     try:
                         d4_check = self.provider.check(
@@ -55,63 +220,188 @@ class VisualNavigator:
                             "格或领取按钮的中心坐标；如果已领取、灰色、未来未解锁则 found=false。",
                             context=context,
                         )
-                        d4_confidence = float(d4_check.get("confidence", 0) or 0)
+                        d4_confidence = float(
+                            d4_check.get("confidence", 0) or 0
+                        )
                         if d4_check.get("found") and d4_confidence >= 0.35:
-                            x, y = self.provider.normalized_to_pixel(d4_check, image.size)
-                            if not click(x, y):
-                                raise RuntimeError("签到 D4 复核点击失败")
+                            x, y = self.provider.normalized_to_pixel(
+                                d4_check,
+                                image.size,
+                            )
+                            try:
+                                clicked = click(x, y)
+                            except Exception as exc:
+                                clicked = False
+                                reason = str(exc)
+                            if not clicked:
+                                consecutive_errors += 1
+                                if not long_running or consecutive_errors > retry_limit:
+                                    raise RuntimeError(
+                                        "签到 D4 复核点击失败"
+                                        + (f": {reason}" if reason else "")
+                                    )
+                                history.append(
+                                    "签到 D4 已定位但后台点击临时失败；保持任务状态并重试。"
+                                )
+                                if not self._sleep_interruptible(
+                                    min(3.0, 0.5 * consecutive_errors),
+                                    should_stop,
+                                ):
+                                    return False
+                                continue
+
                             history.append(
-                                f"第{step + 1}步：收尾复核发现 D4/第4天仍可领取，已点击。"
+                                f"第{step}步：收尾复核发现 D4/第4天仍可领取，已点击。"
                             )
                             done_confirmations = 0
-                            time.sleep(max(0.2, settle_seconds))
+                            consecutive_errors = 0
+                            if not self._sleep_interruptible(
+                                max(0.2, settle_seconds),
+                                should_stop,
+                            ):
+                                return False
                             continue
                     except RuntimeError:
                         raise
                     except Exception:
-                        # A focused check is an extra safeguard. If it fails,
-                        # continue with the normal full-page done verification.
-                        pass
+                        history.append(
+                            "签到 D4 专项复核暂时失败，继续执行整页奖励复核。"
+                        )
 
                 if not verify_done:
+                    self._update_state(
+                        state="done",
+                        step=step,
+                        started_at=started_at,
+                        instruction=instruction,
+                    )
                     return True
 
                 done_confirmations += 1
                 if done_confirmations >= 2:
+                    self._update_state(
+                        state="done",
+                        step=step,
+                        started_at=started_at,
+                        instruction=instruction,
+                    )
                     return True
 
-                # Multi-reward pages are easy to finish too early when one bright
-                # cell remains. Force a fresh full-page verification before
-                # accepting "done".
                 history.append(
-                    f"第{step + 1}步：模型认为完成；开始收尾复核。"
+                    f"第{step}步：模型认为完成；开始收尾复核。"
                     "请逐个扫描整个页面所有亮着/高亮/可领取但尚未领取的奖励，"
                     "签到页尤其检查 D1~D7 和右上/中上区域的 D4；"
                     "若发现任何可领取项必须继续点击，不能提前结束。"
                 )
-                time.sleep(max(0.2, settle_seconds))
+                if not self._sleep_interruptible(
+                    max(0.2, settle_seconds),
+                    should_stop,
+                ):
+                    return False
                 continue
 
             done_confirmations = 0
+
             if status == "blocked":
-                raise RuntimeError(reason or "视觉模型判断当前任务无法安全继续")
+                if self._is_safety_block(reason):
+                    self._update_state(
+                        state="blocked",
+                        step=step,
+                        started_at=started_at,
+                        instruction=instruction,
+                        reason=reason,
+                    )
+                    raise RuntimeError(
+                        reason or "视觉模型判断当前任务存在高风险操作"
+                    )
+
+                transient_blocks += 1
+                if not long_running or transient_blocks > 4:
+                    raise RuntimeError(
+                        reason or "视觉模型判断当前任务无法继续"
+                    )
+
+                history.append(
+                    f"第{step}步：模型暂时无法继续（{reason or '原因不明'}）。"
+                    "不要结束整个长任务；重新观察当前页面，优先关闭普通弹窗、"
+                    "等待加载或按历史路径恢复到任务流程。"
+                )
+                if not self._sleep_interruptible(
+                    min(4.0, 0.7 * transient_blocks),
+                    should_stop,
+                ):
+                    return False
+                continue
+
+            transient_blocks = 0
 
             if action == "wait":
-                time.sleep(max(0.2, settle_seconds))
-                history.append(f"第{step + 1}步：等待界面变化")
+                history.append(f"第{step}步：等待界面变化")
+                if not self._sleep_interruptible(
+                    max(0.2, settle_seconds),
+                    should_stop,
+                ):
+                    return False
                 continue
 
             if action == "click":
-                x, y = self.provider.normalized_to_pixel(decision, image.size)
-                if not click(x, y):
-                    raise RuntimeError(f"AI视觉点击失败: {target or (x, y)}")
-                history.append(f"第{step + 1}步：点击 {target or (x, y)}")
-                time.sleep(max(0.2, settle_seconds))
+                x, y = self.provider.normalized_to_pixel(
+                    decision,
+                    image.size,
+                )
+                try:
+                    clicked = click(x, y)
+                except Exception as exc:
+                    clicked = False
+                    reason = str(exc)
+
+                if not clicked:
+                    consecutive_errors += 1
+                    if not long_running or consecutive_errors > retry_limit:
+                        raise RuntimeError(
+                            f"AI视觉点击连续失败 {consecutive_errors} 次: "
+                            f"{target or (x, y)}"
+                            + (f" ({reason})" if reason else "")
+                        )
+
+                    history.append(
+                        f"第{step}步：点击 {target or (x, y)} 临时失败，"
+                        "保持当前任务状态，重新截图后再决定，不盲目重复同一坐标。"
+                    )
+                    if not self._sleep_interruptible(
+                        min(3.0, 0.5 * consecutive_errors),
+                        should_stop,
+                    ):
+                        return False
+                    continue
+
+                consecutive_errors = 0
+                history.append(
+                    f"第{step}步：点击 {target or (x, y)}"
+                )
+                if not self._sleep_interruptible(
+                    max(0.2, settle_seconds),
+                    should_stop,
+                ):
+                    return False
                 continue
 
-            raise RuntimeError(reason or f"视觉模型返回了不可执行动作: {action}")
+            consecutive_errors += 1
+            if long_running and consecutive_errors <= retry_limit:
+                history.append(
+                    f"第{step}步：模型返回不可执行动作 {action or 'none'}"
+                    f"（{reason or '无说明'}），保持长任务状态并重新观察。"
+                )
+                if not self._sleep_interruptible(
+                    min(3.0, 0.5 * consecutive_errors),
+                    should_stop,
+                ):
+                    return False
+                continue
 
-        raise RuntimeError(f"AI视觉任务超过最大步骤数 {max_steps}，已停止以避免误操作")
+            raise RuntimeError(
+                reason or f"视觉模型返回了不可执行动作: {action}"
+            )
 
     def recover_safe_navigation(
         self,
@@ -134,4 +424,5 @@ class VisualNavigator:
             should_stop=should_stop,
             max_steps=max_steps,
             settle_seconds=0.5,
+            long_running=False,
         )

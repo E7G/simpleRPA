@@ -31,6 +31,7 @@ from .script_editor import ScriptEditor
 from .property_panel import PropertyPanel
 from .recorder_panel import RecorderPanel
 from .ai_chat_panel import AIChatPanel
+from .ai_assistant_page import AIAssistantPage
 from .widgets import WindowSelector
 from .command_panel import CommandManagerWidget
 from .dashboard_page import DashboardPage
@@ -74,6 +75,7 @@ class MainWindow(MSFluentWindow):
         self._setup_navigation()
         self._setup_connections()
         self._load_settings()
+        QTimer.singleShot(0, lambda: self.switchTo(self.aiInterface))
         
         self._mouse_pos_timer = QTimer(self)
         self._mouse_pos_timer.timeout.connect(self._update_mouse_position)
@@ -134,6 +136,12 @@ class MainWindow(MSFluentWindow):
         self.setWindowTitle("SimpleRPA")
         self.setMinimumSize(1280, 850)
         
+        self.aiInterface = AIAssistantPage()
+        self.aiInterface.setObjectName('aiInterface')
+        self.addSubInterface(
+            self.aiInterface, FluentIcon.APPLICATION, 'AI 助手'
+        )
+
         self.dashboardInterface = DashboardPage()
         self.dashboardInterface.setObjectName('dashboardInterface')
         self.addSubInterface(
@@ -325,6 +333,9 @@ class MainWindow(MSFluentWindow):
     def _setup_connections(self):
         self._action_panel.action_added.connect(self._on_action_added)
         self._ai_chat_panel.task_submitted.connect(self._on_ai_chat_task)
+        self.aiInterface.task_requested.connect(self._on_ai_assistant_task)
+        self.aiInterface.stop_requested.connect(self._stop_script)
+        self.aiInterface.window_selected.connect(self._on_ai_assistant_window_selected)
         self._script_editor.action_selected.connect(self._on_action_selected)
         self._script_editor.actions_changed.connect(self._on_actions_changed)
         self._script_editor.execute_single.connect(self._on_execute_single)
@@ -352,6 +363,15 @@ class MainWindow(MSFluentWindow):
     def _on_window_selected(self, hwnd):
         offset = self._window_selector.get_window_offset()
         self._property_panel.set_window_offset(offset)
+
+    def _on_ai_assistant_window_selected(self, hwnd):
+        """Keep the hidden advanced designer bound to the AI page target window."""
+        self._window_selector.refresh_windows()
+        combo = self._window_selector._window_combo
+        for i in range(combo.count()):
+            if combo.itemData(i) == hwnd:
+                combo.setCurrentIndex(i)
+                break
     
     def _create_player_for_tab(self, route_key: str):
         if not route_key:
@@ -983,6 +1003,49 @@ class MainWindow(MSFluentWindow):
     def _on_action_added(self, action: Action):
         self._script_editor.add_action(action)
         self._set_current_tab_modified(True)
+
+    def _on_ai_assistant_task(self, instruction: str, run_now: bool = False):
+        text = (instruction or "").strip()
+        if not text:
+            return
+
+        hwnd = self.aiInterface.get_selected_hwnd()
+        window_title = self.aiInterface.get_selected_title()
+        if not hwnd or not window_title:
+            self.aiInterface.set_status("请先选择目标窗口", error=True)
+            return
+
+        self._on_ai_assistant_window_selected(hwnd)
+        options = self.aiInterface.get_task_options()
+        params = ActionManager.get_default_params(ActionType.AI_VISUAL_TASK)
+        params['instruction'] = text
+        params['prepare_navigation'] = options['prepare_navigation']
+        params['return_home'] = options['return_home']
+
+        action = Action(
+            action_type=ActionType.AI_VISUAL_TASK,
+            params=params,
+            window_title=window_title,
+            background_mode=bool(options['background_mode']),
+        )
+        self._script_editor.add_action(action)
+        self._set_current_tab_modified(True)
+
+        self.aiInterface.append_assistant(
+            f"已生成任务并绑定“{window_title}”。"
+            + (" 准备立即执行。" if run_now else " 已加入高级流程。")
+        )
+
+        if run_now:
+            if not (os.getenv("AGNES_API_KEY") or os.getenv("AGNESAI_API_KEY")):
+                self.aiInterface.set_status("请先在右侧填写 Agnes API Key", error=True)
+                self.aiInterface.append_assistant("任务已生成，但尚未运行：Agnes API Key 未配置。")
+                return
+            index = len(self._script_editor.get_actions()) - 1
+            self.aiInterface.set_status("正在启动 AI 视觉任务…", running=True)
+            QTimer.singleShot(0, lambda idx=index: self._on_execute_single(idx))
+        else:
+            self.aiInterface.set_status("任务已加入流程")
 
     def _on_ai_chat_task(self, instruction: str, run_now: bool = False):
         text = (instruction or "").strip()

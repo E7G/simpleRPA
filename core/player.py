@@ -1182,6 +1182,11 @@ class Player:
 
         try:
 
+            prepared, prepare_error = self._prepare_window_for_run()
+            if not prepared:
+                self._emit('on_window_error', action, index, prepare_error)
+                return False
+
             if self._window_hwnd:
 
                 action._runtime_window_hwnd = self._window_hwnd

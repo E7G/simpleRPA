@@ -5,6 +5,9 @@ use them as priors about navigation/order/regions, while visually verifying the
 current UI before every action.
 """
 
+import json
+import os
+from pathlib import Path
 from typing import List
 
 
@@ -88,6 +91,160 @@ EXAMPLES = [
 ]
 
 
+SCRIPT_HINTS = {
+    "公告": ("公告", "关闭"),
+    "签到": ("签到",),
+    "元宝树": ("元宝树", "浇水", "收获"),
+    "游戏圈": ("游戏圈", "社区"),
+    "招募": ("招募",),
+    "战令": ("战令", "礼盒"),
+    "上上签": ("上上签", "抽签", "幸运"),
+    "俸禄": ("俸禄",),
+}
+
+BROAD_TASK_WORDS = ("全部", "所有", "今天", "每日", "都领", "能领")
+
+
+def _find_local_example_dir():
+    candidates = []
+    configured = os.getenv("SIMPLERPA_EXAMPLE_DIR")
+    if configured:
+        candidates.append(Path(configured))
+
+    repo_root = Path(__file__).resolve().parents[2]
+    candidates.extend([
+        repo_root.parent / "simpleRPAexample",
+        Path("D:/Data/Github/simpleRPAexample"),
+    ])
+
+    for candidate in candidates:
+        try:
+            if candidate.is_dir():
+                return candidate
+        except OSError:
+            continue
+    return None
+
+
+def _matching_script_paths(instruction: str, max_scripts: int = 4):
+    root = _find_local_example_dir()
+    if root is None:
+        return []
+
+    text = (instruction or "").lower()
+    broad = any(word in text for word in BROAD_TASK_WORDS)
+    scored = []
+
+    for path in root.glob("*.rpa.json"):
+        name = path.stem.lower()
+        if "商店自动购买" in name and not any(k in text for k in ("商店", "购买")):
+            # Purchasing scripts are not relevant to ordinary free-reward tasks.
+            continue
+
+        score = 0
+        for group_name, keywords in SCRIPT_HINTS.items():
+            if any(keyword in text for keyword in keywords) and group_name.lower() in name:
+                score += 5
+            elif broad and group_name.lower() in name:
+                score += 1
+
+        if any(keyword in name for keyword in ("关闭公告",)) and any(
+            keyword in text for keyword in ("公告", "弹窗", "关闭", "提示")
+        ):
+            score += 5
+
+        if score:
+            scored.append((score, path.name, path))
+
+    scored.sort(key=lambda item: (-item[0], item[1]))
+    return [item[2] for item in scored[:max_scripts]]
+
+
+def _compact_action(action):
+    action_type = str(action.get("action_type", ""))
+    params = action.get("params") or {}
+    delay = float(action.get("delay_before", 0) or 0)
+    repeat = int(action.get("repeat_count", 1) or 1)
+    condition = str(action.get("condition", "") or "")
+
+    if action_type == "mouse_click_relative":
+        detail = f"后台相对点击({params.get('x')},{params.get('y')})"
+    elif action_type in ("image_check", "image_click", "image_wait_click"):
+        image_name = os.path.basename(str(params.get("image_path", "")))
+        detail = (
+            f"{action_type}({image_name}, confidence={params.get('confidence', '')})"
+        )
+    elif action_type == "action_group_ref":
+        detail = f"动作组<{params.get('group_name', '')}>"
+    else:
+        detail = action_type
+
+    suffix = []
+    if delay >= 0.3:
+        suffix.append(f"前等待≈{delay:.1f}s")
+    if repeat > 1:
+        suffix.append(f"重复×{repeat}")
+    if condition:
+        suffix.append(f"条件={condition}")
+
+    if suffix:
+        detail += " [" + ", ".join(suffix) + "]"
+    return detail
+
+
+def _summarize_local_script(path: Path, max_actions: int = 14, max_groups: int = 5):
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return ""
+
+    actions = payload.get("actions") or []
+    action_lines = [_compact_action(a) for a in actions[:max_actions]]
+    if len(actions) > max_actions:
+        action_lines.append(f"…另有 {len(actions) - max_actions} 个动作")
+
+    group_lines = []
+    groups = payload.get("action_groups") or {}
+    for index, (name, group) in enumerate(groups.items()):
+        if index >= max_groups:
+            group_lines.append(f"…另有 {len(groups) - max_groups} 个动作组")
+            break
+        group_actions = group.get("actions") or []
+        summary = " → ".join(_compact_action(a) for a in group_actions[:8])
+        if len(group_actions) > 8:
+            summary += f" → …({len(group_actions)}步)"
+        group_lines.append(f"动作组<{name}>：{summary}")
+
+    chunks = [
+        f"【本机历史脚本：{payload.get('name') or path.name}】",
+        "主流程：" + " → ".join(action_lines),
+    ]
+    if group_lines:
+        chunks.append("\n".join(group_lines))
+    chunks.append(
+        "使用原则：这是用户已有的实际 RPA 示例，只用于理解路径/区域/节奏；"
+        "当前截图与旧脚本不一致时，以当前截图的语义识别为准。"
+    )
+    return "\n".join(chunks)
+
+
+def _local_example_context(instruction: str, max_scripts: int = 4):
+    summaries = []
+    for path in _matching_script_paths(instruction, max_scripts=max_scripts):
+        summary = _summarize_local_script(path)
+        if summary:
+            summaries.append(summary)
+
+    if not summaries:
+        return ""
+
+    return (
+        "下面是从用户本机 simpleRPAexample 自动读取的相关历史脚本摘要；"
+        "它们比通用猜测优先级更高，但仍需视觉确认：\n\n"
+        + "\n\n".join(summaries)
+    )
+
+
 def select_example_context(instruction: str, max_examples: int = 4) -> str:
     text = (instruction or "").lower()
     scored: List[tuple] = []
@@ -109,5 +266,9 @@ def select_example_context(instruction: str, max_examples: int = 4) -> str:
         chunks.append("与当前任务最相关的历史示例：")
         for item in selected:
             chunks.append(f"【{item['title']}】\n{item['text']}")
+
+    local_examples = _local_example_context(instruction, max_scripts=max_examples)
+    if local_examples:
+        chunks.append(local_examples)
 
     return "\n\n".join(chunks)

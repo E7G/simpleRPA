@@ -493,7 +493,7 @@ class SettingsPanel(QWidget):
         super().__init__(parent)
 
         self.autoCleanup = True
-        self.returnHome = True
+        self.returnHome = False
         self.backgroundMode = True
 
         self.vBoxLayout = QVBoxLayout(self)
@@ -580,11 +580,12 @@ class SettingsPanel(QWidget):
             "任务开始前关闭公告、活动说明和普通提示",
             True,
         )
-        self.returnHomeSwitch = self._add_switch(
-            "完成后返回首页",
-            "任务完成后由视觉导航逐级返回首页或大厅",
-            True,
+        self.stopAtCompletionLabel = CaptionLabel(
+            "任务完成后停留在当前页面，不自动返回首页。",
+            self,
         )
+        self.stopAtCompletionLabel.setWordWrap(True)
+        self.vBoxLayout.addWidget(self.stopAtCompletionLabel)
 
     def _add_switch(self, title, description, checked):
         rowWidget = QWidget(self)
@@ -657,7 +658,8 @@ class SettingsPanel(QWidget):
     def get_options(self):
         return {
             "prepare_navigation": 1 if self.autoCleanupSwitch.isChecked() else 0,
-            "return_home": 1 if self.returnHomeSwitch.isChecked() else 0,
+            # AI Assistant always stops on the completion page.
+            "return_home": 0,
             # AI Assistant is background-only. This is intentionally not a UI option.
             "background_mode": True,
         }

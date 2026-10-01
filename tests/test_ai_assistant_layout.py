@@ -33,6 +33,7 @@ class AIAssistantLayoutTests(unittest.TestCase):
         self.assertIsInstance(page.settingsCard, ExampleCard)
 
         self.assertIsInstance(page.taskPanel.historyEdit, TextEdit)
+        self.assertIsInstance(page.taskPanel.detailsEdit, TextEdit)
         self.assertIsInstance(page.taskPanel.inputEdit, TextEdit)
         self.assertIsInstance(page.settingsPanel.apiKeyEdit, PasswordLineEdit)
         self.assertIsInstance(page.settingsPanel.autoCleanupSwitch, SwitchButton)
@@ -82,6 +83,19 @@ class AIAssistantLayoutTests(unittest.TestCase):
         self.assertTrue(page.settingsPanel.autoCleanupSwitch.isChecked())
         self.assertTrue(page.settingsPanel.returnHomeSwitch.isChecked())
         self.assertTrue(page.get_task_options()["background_mode"])
+
+        page.set_status("长任务运行中", running=True)
+        self.app.processEvents()
+        self.assertTrue(page.taskPanel.runButton.isEnabled())
+        self.assertEqual(page.taskPanel.runButton.text(), "发送指正")
+        self.assertIn("指正", page.taskPanel.inputEdit.placeholderText())
+
+        page.append_trace("🧠 步骤 1：判断=continue")
+        self.assertIn("步骤 1", page.taskPanel.detailsEdit.toPlainText())
+
+        page.set_status("任务完成", running=False)
+        self.app.processEvents()
+        self.assertEqual(page.taskPanel.runButton.text(), "立即执行")
 
         qss = page.styleSheet()
         if theme == Theme.DARK:

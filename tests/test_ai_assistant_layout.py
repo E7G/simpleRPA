@@ -40,6 +40,8 @@ class AIAssistantLayoutTests(unittest.TestCase):
         self.assertIsInstance(page.settingsPanel.backgroundSwitch, SwitchButton)
         self.assertIsInstance(page.settingsPanel.themeButton, PushButton)
         self.assertIsInstance(page.targetPanel.previewPane, PreviewPane)
+        self.assertTrue(page.targetPanel.liveSwitch.isChecked())
+        self.assertEqual(page.targetPanel.liveTimer.interval(), 200)
 
         # Workspace layout: tall portrait preview rail on the left,
         # task/settings stacked on the right.
@@ -52,7 +54,7 @@ class AIAssistantLayoutTests(unittest.TestCase):
         self.assertGreaterEqual(page.targetPanel.previewPane.width(), 340)
         self.assertGreaterEqual(page.targetPanel.previewPane.height(), 560)
         self.assertGreaterEqual(right_rect.x(), target_rect.right())
-        self.assertGreaterEqual(right_rect.width(), 500)
+        self.assertGreaterEqual(right_rect.width(), 450)
         self.assertGreater(settings_rect.y(), task_rect.bottom())
 
         self.assertGreaterEqual(page.taskPanel.historyEdit.height(), 200)

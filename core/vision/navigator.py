@@ -43,6 +43,36 @@ class VisualNavigator:
             reason = str(decision.get("reason", "")).strip()
 
             if status == "done":
+                # Sign-in pages have a recurring failure mode where D1~D3 are
+                # already claimed but D4 remains bright. Before accepting done,
+                # explicitly inspect D4 with a focused visual query.
+                if "签到" in (instruction or "") and hasattr(self.provider, "check"):
+                    try:
+                        d4_check = self.provider.check(
+                            image,
+                            "只检查签到页的 D4/第4天奖励：它现在是否仍亮着、高亮、"
+                            "有可领取状态且尚未领取？如果可领取 found=true 并给出该奖励"
+                            "格或领取按钮的中心坐标；如果已领取、灰色、未来未解锁则 found=false。",
+                            context=context,
+                        )
+                        d4_confidence = float(d4_check.get("confidence", 0) or 0)
+                        if d4_check.get("found") and d4_confidence >= 0.35:
+                            x, y = self.provider.normalized_to_pixel(d4_check, image.size)
+                            if not click(x, y):
+                                raise RuntimeError("签到 D4 复核点击失败")
+                            history.append(
+                                f"第{step + 1}步：收尾复核发现 D4/第4天仍可领取，已点击。"
+                            )
+                            done_confirmations = 0
+                            time.sleep(max(0.2, settle_seconds))
+                            continue
+                    except RuntimeError:
+                        raise
+                    except Exception:
+                        # A focused check is an extra safeguard. If it fails,
+                        # continue with the normal full-page done verification.
+                        pass
+
                 if not verify_done:
                     return True
 

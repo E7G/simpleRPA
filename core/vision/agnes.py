@@ -6,6 +6,7 @@ import re
 import urllib.error
 import urllib.request
 import time
+import threading
 from typing import Any, Dict, Optional
 
 from .example_knowledge import select_example_context
@@ -17,6 +18,16 @@ class AgnesVisionError(RuntimeError):
 
 class AgnesVisionProvider:
     """Small OpenAI-compatible Agnes vision client.
+
+    The free Agnes tier is easy to rate-limit during visual-agent loops, so all
+    provider instances share one process-wide request scheduler.
+    """
+
+    _rate_lock = threading.Lock()
+    _next_request_at = 0.0
+    _rate_limit_until = 0.0
+    _rate_limit_streak = 0
+
 
     Environment variables:
       AGNES_API_KEY / AGNESAI_API_KEY
@@ -37,6 +48,117 @@ class AgnesVisionProvider:
         self.model = model or os.getenv("AGNES_MODEL") or "agnes-3.0-flash"
         self.timeout = float(timeout or os.getenv("AGNES_TIMEOUT") or 45)
         self.retries = max(0, min(int(os.getenv("AGNES_RETRIES") or 3), 8))
+
+        # Conservative free-tier defaults: at most about 12 requests/minute.
+        # Can be tuned without code changes when a paid Agnes plan is used.
+        self.min_request_interval = max(
+            0.0,
+            float(os.getenv("AGNES_MIN_REQUEST_INTERVAL") or 5.0),
+        )
+        self.rate_limit_base_cooldown = max(
+            5.0,
+            float(os.getenv("AGNES_429_BASE_COOLDOWN") or 30.0),
+        )
+        self.rate_limit_max_cooldown = max(
+            self.rate_limit_base_cooldown,
+            float(os.getenv("AGNES_429_MAX_COOLDOWN") or 300.0),
+        )
+        self.status_callback = None
+        self.cancel_callback = None
+
+    def _emit_status(self, message: str):
+        callback = self.status_callback
+        if callback:
+            try:
+                callback(str(message))
+            except Exception:
+                pass
+
+    def _is_cancelled(self) -> bool:
+        callback = self.cancel_callback
+        if not callback:
+            return False
+        try:
+            return bool(callback())
+        except Exception:
+            return False
+
+    def _wait_for_rate_slot(self):
+        announced = False
+
+        while True:
+            if self._is_cancelled():
+                raise AgnesVisionError("Agnes 请求等待已取消")
+
+            with self.__class__._rate_lock:
+                now = time.monotonic()
+                wait_until = max(
+                    self.__class__._next_request_at,
+                    self.__class__._rate_limit_until,
+                )
+                wait_seconds = wait_until - now
+
+                if wait_seconds <= 0:
+                    self.__class__._next_request_at = (
+                        now + self.min_request_interval
+                    )
+                    return
+
+            if not announced and wait_seconds >= 0.25:
+                self._emit_status(
+                    f"Agnes 限频中，约 {wait_seconds:.1f} 秒后继续请求。"
+                )
+                announced = True
+
+            time.sleep(min(0.25, max(0.01, wait_seconds)))
+
+    @staticmethod
+    def _retry_after_seconds(headers) -> Optional[float]:
+        if not headers:
+            return None
+        try:
+            raw = headers.get("Retry-After")
+        except Exception:
+            raw = None
+        if not raw:
+            return None
+        try:
+            return max(0.0, float(str(raw).strip()))
+        except Exception:
+            return None
+
+    def _note_rate_limit(self, retry_after: Optional[float] = None) -> float:
+        cls = self.__class__
+        with cls._rate_lock:
+            cls._rate_limit_streak += 1
+            adaptive = min(
+                self.rate_limit_max_cooldown,
+                self.rate_limit_base_cooldown
+                * (2 ** max(0, cls._rate_limit_streak - 1)),
+            )
+            cooldown = max(float(retry_after or 0.0), adaptive)
+            until = time.monotonic() + cooldown
+            cls._rate_limit_until = max(cls._rate_limit_until, until)
+            cls._next_request_at = max(cls._next_request_at, until)
+        self._emit_status(
+            f"Agnes 触发 429 免费额度限流，自动冷却 {cooldown:.0f} 秒；"
+            "长任务保持当前状态，不会中断。"
+        )
+        return cooldown
+
+    def _note_request_success(self):
+        cls = self.__class__
+        with cls._rate_lock:
+            cls._rate_limit_streak = 0
+            if cls._rate_limit_until <= time.monotonic():
+                cls._rate_limit_until = 0.0
+
+    @classmethod
+    def _reset_rate_limiter_for_tests(cls):
+        with cls._rate_lock:
+            cls._next_request_at = 0.0
+            cls._rate_limit_until = 0.0
+            cls._rate_limit_streak = 0
 
     def _require_key(self):
         if not self.api_key:
@@ -141,6 +263,8 @@ class AgnesVisionProvider:
         last_error = None
 
         for attempt in range(self.retries + 1):
+            self._wait_for_rate_slot()
+
             req = urllib.request.Request(
                 f"{self.base_url}/chat/completions",
                 data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
@@ -156,13 +280,27 @@ class AgnesVisionProvider:
                     raw = resp.read().decode("utf-8")
 
                 response = json.loads(raw)
-                return self._parse_json(self._extract_text(response))
+                parsed = self._parse_json(self._extract_text(response))
+                self._note_request_success()
+                return parsed
 
             except urllib.error.HTTPError as exc:
                 body = exc.read().decode("utf-8", errors="replace")
-                last_error = AgnesVisionError(
-                    f"Agnes HTTP {exc.code}: {body[:500]}"
-                )
+
+                if exc.code == 429:
+                    retry_after = self._retry_after_seconds(
+                        getattr(exc, "headers", None)
+                    )
+                    cooldown = self._note_rate_limit(retry_after)
+                    last_error = AgnesVisionError(
+                        f"Agnes HTTP 429: 已触发免费用户限流，"
+                        f"自动冷却 {cooldown:.0f} 秒后继续。{body[:300]}"
+                    )
+                else:
+                    last_error = AgnesVisionError(
+                        f"Agnes HTTP {exc.code}: {body[:500]}"
+                    )
+
                 retryable = exc.code in (408, 409, 425, 429, 500, 502, 503, 504)
                 if not retryable or attempt >= self.retries:
                     raise last_error from exc
@@ -179,8 +317,11 @@ class AgnesVisionProvider:
                 if attempt >= self.retries:
                     raise last_error from exc
 
-            # Short exponential backoff. VisualNavigator has a second, longer
-            # recovery layer so a transient provider outage does not end a long task.
+            # 429 cooldown is handled by the shared scheduler above. Other
+            # transient failures still get a short local backoff.
+            if isinstance(last_error, AgnesVisionError) and "HTTP 429" in str(last_error):
+                continue
+
             time.sleep(min(4.0, 0.5 * (2 ** attempt)))
 
         raise last_error or AgnesVisionError("Agnes 请求失败")

@@ -823,7 +823,7 @@ class Action:
                     settle_seconds=float(self.params.get('settle_seconds', 0.7)),
                     long_running=long_running,
                     max_runtime_seconds=60.0 * float(
-                        self.params.get('max_runtime_minutes', 120)
+                        self.params.get('max_runtime_minutes', 360)
                     ),
                     retry_limit=int(self.params.get('retry_limit', 10)),
                 )
@@ -1477,7 +1477,7 @@ class ActionManager:
                 {'name': 'cleanup_steps', 'type': 'int', 'default': 4, 'description': '任务前后页面整理最大步骤数'},
                 {'name': 'max_steps', 'type': 'int', 'default': 30, 'description': '长任务检查点步数（不是硬终止上限）'},
                 {'name': 'long_running', 'type': 'int', 'default': 1, 'description': '长任务持续运行模式(1开/0关)'},
-                {'name': 'max_runtime_minutes', 'type': 'int', 'default': 120, 'description': '长任务最长运行分钟数'},
+                {'name': 'max_runtime_minutes', 'type': 'int', 'default': 360, 'description': '长任务最长运行分钟数'},
                 {'name': 'retry_limit', 'type': 'int', 'default': 10, 'description': '连续临时错误最大自动恢复次数'},
                 {'name': 'settle_seconds', 'type': 'float', 'default': 0.7, 'description': '每次点击后等待界面稳定秒数'},
             ]

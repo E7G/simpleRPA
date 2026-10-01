@@ -5,6 +5,7 @@ import os
 import re
 import urllib.error
 import urllib.request
+import time
 from typing import Any, Dict, Optional
 
 from .example_knowledge import select_example_context
@@ -35,6 +36,7 @@ class AgnesVisionProvider:
         self.base_url = (base_url or os.getenv("AGNES_API_BASE") or "https://apihub.agnes-ai.com/v1").rstrip("/")
         self.model = model or os.getenv("AGNES_MODEL") or "agnes-3.0-flash"
         self.timeout = float(timeout or os.getenv("AGNES_TIMEOUT") or 45)
+        self.retries = max(0, min(int(os.getenv("AGNES_RETRIES") or 3), 8))
 
     def _require_key(self):
         if not self.api_key:
@@ -112,6 +114,8 @@ class AgnesVisionProvider:
             "优先参考旧流程的页面顺序、入口区域、返回路径、循环条件和等待节奏；"
             "但旧坐标只能作为区域提示，每一步仍必须用当前截图验证语义目标后再点击。"
             "不要因为用户只说一句简短目标就忽略这些示例，也不要在尚可按历史路径继续导航时过早返回 blocked。"
+            "对于长任务，页面加载中、网络波动、动画未结束、暂时看不懂当前页面时，应优先返回 continue+wait，"
+            "不要用 blocked 结束整个任务；blocked 只用于明确的高风险操作或确定无法继续的不可恢复状态。"
         )
         user_text = f"任务：{instruction}\n输出格式：{schema_hint}"
         if context:
@@ -134,29 +138,52 @@ class AgnesVisionProvider:
             "stream": False,
         }
 
-        req = urllib.request.Request(
-            f"{self.base_url}/chat/completions",
-            data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
-            headers={
-                "Authorization": f"Bearer {self.api_key}",
-                "Content-Type": "application/json",
-            },
-            method="POST",
-        )
-        try:
-            with urllib.request.urlopen(req, timeout=self.timeout) as resp:
-                raw = resp.read().decode("utf-8")
-        except urllib.error.HTTPError as exc:
-            body = exc.read().decode("utf-8", errors="replace")
-            raise AgnesVisionError(f"Agnes HTTP {exc.code}: {body[:500]}") from exc
-        except Exception as exc:
-            raise AgnesVisionError(f"Agnes 请求失败: {exc}") from exc
+        last_error = None
 
-        try:
-            response = json.loads(raw)
-        except json.JSONDecodeError as exc:
-            raise AgnesVisionError(f"Agnes 返回不是 JSON: {raw[:300]}") from exc
-        return self._parse_json(self._extract_text(response))
+        for attempt in range(self.retries + 1):
+            req = urllib.request.Request(
+                f"{self.base_url}/chat/completions",
+                data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+                headers={
+                    "Authorization": f"Bearer {self.api_key}",
+                    "Content-Type": "application/json",
+                },
+                method="POST",
+            )
+
+            try:
+                with urllib.request.urlopen(req, timeout=self.timeout) as resp:
+                    raw = resp.read().decode("utf-8")
+
+                response = json.loads(raw)
+                return self._parse_json(self._extract_text(response))
+
+            except urllib.error.HTTPError as exc:
+                body = exc.read().decode("utf-8", errors="replace")
+                last_error = AgnesVisionError(
+                    f"Agnes HTTP {exc.code}: {body[:500]}"
+                )
+                retryable = exc.code in (408, 409, 425, 429, 500, 502, 503, 504)
+                if not retryable or attempt >= self.retries:
+                    raise last_error from exc
+
+            except (json.JSONDecodeError, AgnesVisionError) as exc:
+                last_error = AgnesVisionError(
+                    f"Agnes 返回解析失败: {str(exc)[:500]}"
+                )
+                if attempt >= self.retries:
+                    raise last_error from exc
+
+            except Exception as exc:
+                last_error = AgnesVisionError(f"Agnes 请求失败: {exc}")
+                if attempt >= self.retries:
+                    raise last_error from exc
+
+            # Short exponential backoff. VisualNavigator has a second, longer
+            # recovery layer so a transient provider outage does not end a long task.
+            time.sleep(min(4.0, 0.5 * (2 ** attempt)))
+
+        raise last_error or AgnesVisionError("Agnes 请求失败")
 
     def locate(self, image, target: str, context: str = "") -> Dict[str, Any]:
         result = self._request(

@@ -11,6 +11,7 @@ from qfluentwidgets import (
     LineEdit, PasswordLineEdit, PushButton, PrimaryPushButton,
     HeaderCardWidget, ImageLabel, InfoBadge, InfoBar, InfoBarPosition,
     SwitchSettingCard, IndeterminateProgressRing, FluentIcon,
+    ComboBox, setTheme, Theme,
 )
 
 from .widgets import WindowSelector
@@ -181,6 +182,13 @@ class AIAssistantPage(QWidget):
         layout.setContentsMargins(12, 10, 12, 16)
         layout.setSpacing(10)
 
+        layout.addWidget(CaptionLabel("界面主题"))
+        self._theme = ComboBox(self)
+        self._theme.addItems(["跟随系统", "浅色", "深色"])
+        self._theme.setCurrentIndex(0)
+        self._theme.currentTextChanged.connect(self._on_theme_changed)
+        layout.addWidget(self._theme)
+
         layout.addWidget(CaptionLabel("Agnes API Key（仅当前会话）"))
         self._api_key = PasswordLineEdit(self)
         self._api_key.setPlaceholderText("粘贴 API Key")
@@ -235,6 +243,14 @@ class AIAssistantPage(QWidget):
         hint.setWordWrap(True)
         layout.addWidget(hint)
         layout.addStretch()
+
+    def _on_theme_changed(self, text):
+        mapping = {
+            "跟随系统": Theme.AUTO,
+            "浅色": Theme.LIGHT,
+            "深色": Theme.DARK,
+        }
+        setTheme(mapping.get(text, Theme.AUTO))
 
     def get_selected_hwnd(self):
         return self._window_selector.get_selected_hwnd()

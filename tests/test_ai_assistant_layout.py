@@ -37,11 +37,11 @@ class AIAssistantLayoutTests(unittest.TestCase):
         self.assertIsInstance(page.settingsPanel.apiKeyEdit, PasswordLineEdit)
         self.assertIsInstance(page.settingsPanel.autoCleanupSwitch, SwitchButton)
         self.assertIsInstance(page.settingsPanel.returnHomeSwitch, SwitchButton)
-        self.assertIsInstance(page.settingsPanel.backgroundSwitch, SwitchButton)
         self.assertIsInstance(page.settingsPanel.themeButton, PushButton)
         self.assertIsInstance(page.targetPanel.previewPane, PreviewPane)
-        self.assertTrue(page.targetPanel.liveSwitch.isChecked())
-        self.assertEqual(page.targetPanel.liveTimer.interval(), 200)
+        self.assertFalse(hasattr(page.targetPanel, "liveSwitch"))
+        self.assertEqual(page.targetPanel.liveTimer.interval(), 33)
+        self.assertTrue(page.get_task_options()["background_mode"])
 
         # Workspace layout: tall portrait preview rail on the left,
         # task/settings stacked on the right.
@@ -81,7 +81,7 @@ class AIAssistantLayoutTests(unittest.TestCase):
 
         self.assertTrue(page.settingsPanel.autoCleanupSwitch.isChecked())
         self.assertTrue(page.settingsPanel.returnHomeSwitch.isChecked())
-        self.assertTrue(page.settingsPanel.backgroundSwitch.isChecked())
+        self.assertTrue(page.get_task_options()["background_mode"])
 
         qss = page.styleSheet()
         if theme == Theme.DARK:

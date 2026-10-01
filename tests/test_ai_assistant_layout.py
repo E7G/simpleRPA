@@ -41,31 +41,40 @@ class AIAssistantLayoutTests(unittest.TestCase):
         self.assertIsInstance(page.settingsPanel.themeButton, PushButton)
         self.assertIsInstance(page.targetPanel.previewPane, PreviewPane)
 
-        # A normal 16:9 screenshot must be rendered as a genuinely large preview,
-        # not at the source/native ImageLabel size or as a tiny fixed widget.
-        image = QImage(1920, 1080, QImage.Format_RGB32)
-        image.fill(0xFF404040)
-        page.targetPanel.previewPane.set_image(image)
-        self.app.processEvents()
-        preview_size = page.targetPanel.previewPane.imageLabel.size()
-        self.assertGreaterEqual(preview_size.width(), 600)
-        self.assertGreaterEqual(preview_size.height(), 300)
+        # Workspace layout: tall portrait preview rail on the left,
+        # task/settings stacked on the right.
+        target_rect = page.targetCard.geometry()
+        right_rect = page.rightWidget.geometry()
+        task_rect = page.taskCard.geometry()
+        settings_rect = page.settingsCard.geometry()
 
-        cards = [page.targetCard, page.taskCard, page.settingsCard]
-        previous_bottom = -1
-        for card in cards:
-            rect = card.geometry()
-            self.assertGreater(rect.width(), 700)
-            self.assertGreater(rect.height(), 40)
-            self.assertGreaterEqual(rect.x(), 20)
-            self.assertGreater(rect.y(), previous_bottom)
-            previous_bottom = rect.bottom()
+        self.assertGreaterEqual(target_rect.width(), 390)
+        self.assertGreaterEqual(page.targetPanel.previewPane.width(), 340)
+        self.assertGreaterEqual(page.targetPanel.previewPane.height(), 560)
+        self.assertGreaterEqual(right_rect.x(), target_rect.right())
+        self.assertGreaterEqual(right_rect.width(), 500)
+        self.assertGreater(settings_rect.y(), task_rect.bottom())
 
         self.assertGreaterEqual(page.taskPanel.historyEdit.height(), 200)
         self.assertGreaterEqual(page.taskPanel.inputEdit.height(), 90)
         self.assertGreater(
             page.taskPanel.inputEdit.geometry().top(),
             page.taskPanel.historyEdit.geometry().bottom(),
+        )
+
+        # Portrait game screenshots should fill most of the left rail while
+        # preserving their native aspect ratio.
+        portrait = QImage(720, 1280, QImage.Format_RGB32)
+        portrait.fill(0xFF404040)
+        page.targetPanel.previewPane.set_image(portrait)
+        self.app.processEvents()
+        portrait_size = page.targetPanel.previewPane.imageLabel.size()
+        self.assertGreaterEqual(portrait_size.width(), 300)
+        self.assertGreaterEqual(portrait_size.height(), 530)
+        self.assertAlmostEqual(
+            portrait_size.width() / portrait_size.height(),
+            720 / 1280,
+            delta=0.03,
         )
 
         self.assertTrue(page.settingsPanel.autoCleanupSwitch.isChecked())

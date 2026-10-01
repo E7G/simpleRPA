@@ -139,7 +139,10 @@ class MainWindow(MSFluentWindow):
         self.aiInterface = AIAssistantPage()
         self.aiInterface.setObjectName('aiInterface')
         self.addSubInterface(
-            self.aiInterface, FluentIcon.APPLICATION, 'AI 助手'
+            self.aiInterface,
+            FluentIcon.APPLICATION,
+            'AI 助手',
+            isTransparent=True,
         )
 
         self.dashboardInterface = DashboardPage()

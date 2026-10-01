@@ -320,9 +320,10 @@ class Action:
                 raise Exception(f"未找到后台窗口: {self.window_title or self._get_runtime_window_hwnd()}")
             image = clicker.capture(background=True)
             if image is None:
-                image = clicker.capture(background=False)
-            if image is None:
-                raise Exception(f"AI视觉后台截图失败: {self.window_title or self._get_runtime_window_hwnd()}")
+                raise Exception(
+                    f"AI视觉后台截图失败: {self.window_title or self._get_runtime_window_hwnd()}。"
+                    "后台模式已禁止降级为前台截图，以免抢占窗口焦点。"
+                )
             return image, clicker, (0, 0)
 
         region = self._get_window_client_region()

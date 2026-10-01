@@ -21,6 +21,7 @@ from core.actions import Action, ActionManager, ActionType, can_actions_run_offs
 from core.player import Player, PlayerState
 from core.exporter import Exporter
 from core.action_group import LocalActionGroupManager
+from core.vision.example_knowledge import get_reference_labels
 from utils.config import Config
 from utils.window_utils import WindowUtils, WindowInfo
 from utils.update_checker import UpdateChecker
@@ -1039,8 +1040,14 @@ class MainWindow(MSFluentWindow):
         self._script_editor.add_action(action)
         self._set_current_tab_modified(True)
 
+        references = get_reference_labels(text)
+        if references:
+            self.aiInterface.append_assistant(
+                "已加载历史示例：" + "、".join(references)
+            )
+
         self.aiInterface.append_assistant(
-            f"已生成任务并绑定“{window_title}”。"
+            f"已生成后台任务并绑定“{window_title}”。"
             + (" 准备立即执行。" if run_now else " 已加入高级流程。")
         )
 

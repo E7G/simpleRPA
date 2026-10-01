@@ -1452,7 +1452,7 @@ class ActionManager:
                 {'name': 'prepare_navigation', 'type': 'int', 'default': 1, 'description': '任务前自动关闭公告/普通弹窗(1开/0关)'},
                 {'name': 'return_home', 'type': 'int', 'default': 1, 'description': '任务完成后自动视觉返回首页(1开/0关)'},
                 {'name': 'cleanup_steps', 'type': 'int', 'default': 4, 'description': '任务前后页面整理最大步骤数'},
-                {'name': 'max_steps', 'type': 'int', 'default': 10, 'description': '业务任务最大视觉操作步骤数'},
+                {'name': 'max_steps', 'type': 'int', 'default': 30, 'description': '业务任务最大视觉操作步骤数'},
                 {'name': 'settle_seconds', 'type': 'float', 'default': 0.7, 'description': '每次点击后等待界面稳定秒数'},
             ]
         },

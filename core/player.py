@@ -344,7 +344,7 @@ class Player:
 
 
 
-    def _prepare_window_for_run(self) -> Tuple[bool, str]:
+    def _prepare_window_for_run(self, actions_override=None) -> Tuple[bool, str]:
 
         if self._window_prepared:
             return True, ""
@@ -353,8 +353,9 @@ class Player:
             return True, ""
 
         if self._window_run_mode in ("offscreen", "offscreen_hidden_taskbar"):
+            actions_to_check = self.actions if actions_override is None else actions_override
             if not can_actions_run_offscreen(
-                self.actions,
+                actions_to_check,
                 local_group_manager=self._local_group_manager,
             ):
                 return False, "离屏后台运行失败: 脚本包含未启用后台模式或依赖前台输入的动作"
@@ -1182,7 +1183,7 @@ class Player:
 
         try:
 
-            prepared, prepare_error = self._prepare_window_for_run()
+            prepared, prepare_error = self._prepare_window_for_run([action])
             if not prepared:
                 self._emit('on_window_error', action, index, prepare_error)
                 return False

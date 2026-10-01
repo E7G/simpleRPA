@@ -212,6 +212,7 @@ class VisualNavigator:
 
             if status == "done":
                 if "签到" in (instruction or "") and hasattr(self.provider, "check"):
+                    d4_check = None
                     try:
                         d4_check = self.provider.check(
                             image,
@@ -220,6 +221,13 @@ class VisualNavigator:
                             "格或领取按钮的中心坐标；如果已领取、灰色、未来未解锁则 found=false。",
                             context=context,
                         )
+                    except Exception as exc:
+                        history.append(
+                            f"签到 D4 专项复核暂时失败（{exc}），保持长任务状态，"
+                            "继续执行整页奖励复核。"
+                        )
+
+                    if d4_check:
                         d4_confidence = float(
                             d4_check.get("confidence", 0) or 0
                         )
@@ -261,12 +269,6 @@ class VisualNavigator:
                             ):
                                 return False
                             continue
-                    except RuntimeError:
-                        raise
-                    except Exception:
-                        history.append(
-                            "签到 D4 专项复核暂时失败，继续执行整页奖励复核。"
-                        )
 
                 if not verify_done:
                     self._update_state(

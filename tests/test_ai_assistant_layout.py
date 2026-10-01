@@ -5,12 +5,11 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PyQt5.QtWidgets import QApplication
 from qfluentwidgets import (
-    Theme, setTheme, ScrollArea, HeaderCardWidget,
-    GroupHeaderCardWidget, SettingCardGroup, TextEdit,
-    PasswordLineEdit, OptionsSettingCard, SwitchSettingCard,
+    Theme, setTheme, ScrollArea, TextEdit,
+    PasswordLineEdit, SwitchButton, PushButton,
 )
 
-from gui.ai_assistant_page import AIAssistantPage
+from gui.ai_assistant_page import AIAssistantPage, ExampleCard, AIToolBar
 
 
 class AIAssistantLayoutTests(unittest.TestCase):
@@ -23,28 +22,24 @@ class AIAssistantLayoutTests(unittest.TestCase):
         page = AIAssistantPage()
         page.resize(1180, 760)
         page.show()
+        page._apply_qss()
         self.app.processEvents()
 
         self.assertIsInstance(page, ScrollArea)
-        self.assertIsInstance(page.targetCard, HeaderCardWidget)
-        self.assertIsInstance(page.taskCard, HeaderCardWidget)
-        self.assertIsInstance(page.connectionCard, GroupHeaderCardWidget)
-        self.assertIsInstance(page.behaviorGroup, SettingCardGroup)
+        self.assertIsInstance(page.toolBar, AIToolBar)
+        self.assertIsInstance(page.targetCard, ExampleCard)
+        self.assertIsInstance(page.taskCard, ExampleCard)
+        self.assertIsInstance(page.settingsCard, ExampleCard)
 
-        self.assertIsInstance(page.taskCard.historyEdit, TextEdit)
-        self.assertIsInstance(page.taskCard.inputEdit, TextEdit)
-        self.assertIsInstance(page.connectionCard.apiKeyEdit, PasswordLineEdit)
-        self.assertIsInstance(page.themeCard, OptionsSettingCard)
-        self.assertIsInstance(page.autoCleanupCard, SwitchSettingCard)
-        self.assertIsInstance(page.returnHomeCard, SwitchSettingCard)
-        self.assertIsInstance(page.backgroundCard, SwitchSettingCard)
+        self.assertIsInstance(page.taskPanel.historyEdit, TextEdit)
+        self.assertIsInstance(page.taskPanel.inputEdit, TextEdit)
+        self.assertIsInstance(page.settingsPanel.apiKeyEdit, PasswordLineEdit)
+        self.assertIsInstance(page.settingsPanel.autoCleanupSwitch, SwitchButton)
+        self.assertIsInstance(page.settingsPanel.returnHomeSwitch, SwitchButton)
+        self.assertIsInstance(page.settingsPanel.backgroundSwitch, SwitchButton)
+        self.assertIsInstance(page.toolBar.themeButton, PushButton)
 
-        cards = [
-            page.targetCard,
-            page.taskCard,
-            page.connectionCard,
-            page.behaviorGroup,
-        ]
+        cards = [page.targetCard, page.taskCard, page.settingsCard]
         previous_bottom = -1
         for card in cards:
             rect = card.geometry()
@@ -54,16 +49,22 @@ class AIAssistantLayoutTests(unittest.TestCase):
             self.assertGreater(rect.y(), previous_bottom)
             previous_bottom = rect.bottom()
 
-        self.assertGreaterEqual(page.taskCard.historyEdit.height(), 250)
-        self.assertGreaterEqual(page.taskCard.inputEdit.height(), 90)
+        self.assertGreaterEqual(page.taskPanel.historyEdit.height(), 200)
+        self.assertGreaterEqual(page.taskPanel.inputEdit.height(), 90)
         self.assertGreater(
-            page.taskCard.inputEdit.geometry().top(),
-            page.taskCard.historyEdit.geometry().bottom(),
+            page.taskPanel.inputEdit.geometry().top(),
+            page.taskPanel.historyEdit.geometry().bottom(),
         )
 
-        self.assertTrue(page.autoCleanupCard.isChecked())
-        self.assertTrue(page.returnHomeCard.isChecked())
-        self.assertTrue(page.backgroundCard.isChecked())
+        self.assertTrue(page.settingsPanel.autoCleanupSwitch.isChecked())
+        self.assertTrue(page.settingsPanel.returnHomeSwitch.isChecked())
+        self.assertTrue(page.settingsPanel.backgroundSwitch.isChecked())
+
+        qss = page.styleSheet()
+        if theme == Theme.DARK:
+            self.assertIn("rgba(0, 0, 0, 0.1795)", qss)
+        else:
+            self.assertIn("rgba(0, 0, 0, 0.024)", qss)
 
         page.close()
         page.deleteLater()

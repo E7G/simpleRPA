@@ -40,7 +40,7 @@ class AIAssistantLayoutTests(unittest.TestCase):
         self.assertIsInstance(page.settingsPanel.themeButton, PushButton)
         self.assertIsInstance(page.targetPanel.previewPane, PreviewPane)
         self.assertFalse(hasattr(page.targetPanel, "liveSwitch"))
-        self.assertEqual(page.targetPanel.liveTimer.interval(), 33)
+        self.assertEqual(page.targetPanel.liveTimer.interval(), 16)
         self.assertTrue(page.get_task_options()["background_mode"])
 
         # Workspace layout: tall portrait preview rail on the left,

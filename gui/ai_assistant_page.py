@@ -28,7 +28,8 @@ class AIToolBar(QWidget):
         self.subtitleLabel = CaptionLabel(
             "选择目标窗口，然后直接用自然语言描述任务。", self
         )
-        self.themeButton = PushButton(FIF.CONSTRACT, "切换主题", self)
+        self.themeButton = PushButton("切换主题", self)
+        self.themeButton.setFixedWidth(108)
 
         self.vBoxLayout = QVBoxLayout(self)
         self.buttonLayout = QHBoxLayout()

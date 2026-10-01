@@ -1,5 +1,7 @@
 import os
 import threading
+import time
+from collections import deque
 
 from PyQt5.QtWidgets import (
     QWidget, QFrame, QVBoxLayout, QHBoxLayout, QGridLayout, QSizePolicy
@@ -169,11 +171,13 @@ class TargetPanel(QWidget):
         self._preview_busy = False
         self._preview_failures = 0
         self._live_page_active = True
+        self._frame_times = deque(maxlen=90)
 
         self.preview_result.connect(self._on_preview_result)
 
         self.liveTimer = QTimer(self)
-        self.liveTimer.setInterval(200)  # ~5 FPS; enough to follow RPA steps without heavy CPU use
+        self.liveTimer.setTimerType(Qt.PreciseTimer)
+        self.liveTimer.setInterval(33)  # target ~30 FPS; busy frames are dropped, never queued
         self.liveTimer.timeout.connect(self._request_live_frame)
 
         self.vBoxLayout = QVBoxLayout(self)
@@ -191,15 +195,7 @@ class TargetPanel(QWidget):
         self.refreshButton = PushButton(FIF.SYNC, "立即刷新", self)
         self.refreshButton.clicked.connect(self.refresh_preview)
 
-        self.liveSwitch = SwitchButton(self)
-        self.liveSwitch.setChecked(True)
-        self.liveSwitch.checkedChanged.connect(self._on_live_toggled)
-
-        self.liveLabel = CaptionLabel("实时预览", self)
-
         top.addWidget(self.windowSelector, 1)
-        top.addWidget(self.liveLabel)
-        top.addWidget(self.liveSwitch)
         top.addWidget(self.refreshButton)
 
         self.previewPane = PreviewPane(self)
@@ -227,21 +223,16 @@ class TargetPanel(QWidget):
         self._update_live_timer()
         self._request_live_frame(force=True)
 
-    def _on_live_toggled(self, checked):
-        self._update_live_timer()
-        if checked:
-            self._request_live_frame(force=True)
-
     def set_live_page_active(self, active: bool):
         self._live_page_active = bool(active)
         self._update_live_timer()
-        if active and self.liveSwitch.isChecked():
+        if active:
             self._request_live_frame(force=True)
 
     def _update_live_timer(self):
+        # Live preview is a fixed behavior of the AI assistant, not a user option.
         should_run = bool(
             self._live_page_active
-            and self.liveSwitch.isChecked()
             and self.get_selected_hwnd()
         )
         if should_run:
@@ -264,7 +255,7 @@ class TargetPanel(QWidget):
         if self._preview_busy:
             return
 
-        if not force and (not self._live_page_active or not self.liveSwitch.isChecked()):
+        if not force and not self._live_page_active:
             return
 
         self._preview_busy = True
@@ -322,9 +313,18 @@ class TargetPanel(QWidget):
             self._preview_failures = 0
             self._last_preview = QPixmap.fromImage(qimg)
             self.previewPane.set_image(qimg)
-            fps = int(round(1000 / max(1, self.liveTimer.interval())))
+
+            now = time.perf_counter()
+            self._frame_times.append(now)
+            actual_fps = 0.0
+            if len(self._frame_times) >= 2:
+                elapsed = self._frame_times[-1] - self._frame_times[0]
+                if elapsed > 0:
+                    actual_fps = (len(self._frame_times) - 1) / elapsed
+
             self.stateLabel.setText(
-                f"实时预览 · 约 {fps} FPS · {result.get('width')}×{result.get('height')} · "
+                f"后台实时预览 · {actual_fps:.1f} FPS · "
+                f"{result.get('width')}×{result.get('height')} · "
                 f"{self.get_selected_title()}"
             )
             return
@@ -550,11 +550,6 @@ class SettingsPanel(QWidget):
             "任务完成后由视觉导航逐级返回首页或大厅",
             True,
         )
-        self.backgroundSwitch = self._add_switch(
-            "后台视觉操作",
-            "优先使用后台截图和后台点击，不抢占鼠标",
-            True,
-        )
 
     def _add_switch(self, title, description, checked):
         rowWidget = QWidget(self)
@@ -628,7 +623,8 @@ class SettingsPanel(QWidget):
         return {
             "prepare_navigation": 1 if self.autoCleanupSwitch.isChecked() else 0,
             "return_home": 1 if self.returnHomeSwitch.isChecked() else 0,
-            "background_mode": self.backgroundSwitch.isChecked(),
+            # AI Assistant is background-only. This is intentionally not a UI option.
+            "background_mode": True,
         }
 
 

@@ -117,6 +117,27 @@ class LongTaskProvider:
         return {"status": "done", "action": "none", "reason": "任务完成"}
 
 
+class CorrectionAwareProvider:
+    @staticmethod
+    def normalized_to_pixel(result, image_size):
+        return AgnesVisionProvider.normalized_to_pixel(result, image_size)
+
+    def __init__(self):
+        self.calls = 0
+        self.contexts = []
+
+    def next_action(self, image, instruction, context=""):
+        self.calls += 1
+        self.contexts.append(context)
+        if self.calls == 1:
+            return {
+                "status": "continue",
+                "action": "wait",
+                "reason": "等待指正",
+            }
+        return {"status": "done", "action": "none", "reason": "已按指正完成"}
+
+
 class VisionCoreTests(unittest.TestCase):
     def test_ai_actions_registered(self):
         expected = {
@@ -222,6 +243,31 @@ class VisionCoreTests(unittest.TestCase):
         self.assertEqual(params["long_running"], 1)
         self.assertEqual(params["max_runtime_minutes"], 360)
         self.assertGreaterEqual(params["retry_limit"], 10)
+
+    def test_live_correction_is_injected_into_next_agent_context(self):
+        provider = CorrectionAwareProvider()
+        navigator = VisualNavigator(provider)
+        corrections = [["D4 还亮着，先点 D4"], []]
+        events = []
+
+        result = navigator.run(
+            instruction="领取签到奖励",
+            capture=lambda: FakeImage(),
+            click=lambda x, y: True,
+            max_steps=4,
+            settle_seconds=0,
+            long_running=True,
+            correction_source=lambda: corrections.pop(0) if corrections else [],
+            event_callback=lambda kind, message: events.append((kind, message)),
+        )
+
+        self.assertTrue(result)
+        self.assertGreaterEqual(provider.calls, 3)
+        self.assertIn("用户中途指正", provider.contexts[0])
+        self.assertIn("D4 还亮着，先点 D4", provider.contexts[0])
+        self.assertTrue(any(kind == "correction" for kind, _ in events))
+        self.assertTrue(any(kind == "decision" for kind, _ in events))
+        self.assertTrue(any(kind == "done" for kind, _ in events))
 
     def test_visual_navigator_bounded_click_loop(self):
         provider = FakeProvider()

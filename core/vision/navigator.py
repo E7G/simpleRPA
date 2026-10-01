@@ -20,7 +20,12 @@ class VisualNavigator:
         settle_seconds: float = 0.7,
     ) -> bool:
         history = []
-        max_steps = max(1, min(int(max_steps), 30))
+        max_steps = max(1, min(int(max_steps), 40))
+        verify_done = any(
+            keyword in (instruction or "")
+            for keyword in ("签到", "奖励", "领取", "战令", "元宝树", "招募", "游戏圈")
+        )
+        done_confirmations = 0
 
         for step in range(max_steps):
             if should_stop and should_stop():
@@ -38,7 +43,26 @@ class VisualNavigator:
             reason = str(decision.get("reason", "")).strip()
 
             if status == "done":
-                return True
+                if not verify_done:
+                    return True
+
+                done_confirmations += 1
+                if done_confirmations >= 2:
+                    return True
+
+                # Multi-reward pages are easy to finish too early when one bright
+                # cell remains. Force a fresh full-page verification before
+                # accepting "done".
+                history.append(
+                    f"第{step + 1}步：模型认为完成；开始收尾复核。"
+                    "请逐个扫描整个页面所有亮着/高亮/可领取但尚未领取的奖励，"
+                    "签到页尤其检查 D1~D7 和右上/中上区域的 D4；"
+                    "若发现任何可领取项必须继续点击，不能提前结束。"
+                )
+                time.sleep(max(0.2, settle_seconds))
+                continue
+
+            done_confirmations = 0
             if status == "blocked":
                 raise RuntimeError(reason or "视觉模型判断当前任务无法安全继续")
 

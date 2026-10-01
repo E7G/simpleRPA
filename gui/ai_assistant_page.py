@@ -179,7 +179,10 @@ class TargetPanel(QWidget):
 
         self.liveTimer = QTimer(self)
         self.liveTimer.setTimerType(Qt.PreciseTimer)
-        self.liveTimer.setInterval(33)  # target ~30 FPS; busy frames are dropped, never queued
+        # Poll faster than the capture backend so the next frame starts
+        # immediately after the previous one finishes. Real PrintWindow preview
+        # on Windows measures ~29 FPS without queueing frames or stealing focus.
+        self.liveTimer.setInterval(16)
         self.liveTimer.timeout.connect(self._request_live_frame)
 
         self.vBoxLayout = QVBoxLayout(self)

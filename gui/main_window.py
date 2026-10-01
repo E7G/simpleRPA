@@ -1218,7 +1218,7 @@ class MainWindow(MSFluentWindow):
         # remains available for scripts that explicitly want off-screen relocation.
         background_action = bool(target_action.background_mode)
         offscreen_requested = bool(
-            selected_hwnd and self._offscreen_cb.isChecked() and not background_action
+            selected_hwnd and self._offscreen_cb.isChecked()
         )
         offscreen_supported = (
             can_actions_run_offscreen(

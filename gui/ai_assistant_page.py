@@ -62,9 +62,16 @@ class TargetWindowCard(HeaderCardWidget):
         self.topLayout.addWidget(self.windowSelector, 1)
         self.topLayout.addWidget(self.refreshButton, 0, Qt.AlignRight)
 
-        self.viewLayout.addLayout(self.topLayout)
-        self.viewLayout.addWidget(self.previewLabel)
-        self.viewLayout.addWidget(self.stateLabel)
+        self.contentLayout = QVBoxLayout()
+        self.contentLayout.setContentsMargins(0, 0, 0, 0)
+        self.contentLayout.setSpacing(10)
+        self.contentLayout.addLayout(self.topLayout)
+        self.contentLayout.addWidget(self.previewLabel)
+        self.contentLayout.addWidget(self.stateLabel)
+
+        # HeaderCardWidget.viewLayout is a QHBoxLayout in QFluentWidgets.
+        # The official examples add one vertical layout into it.
+        self.viewLayout.addLayout(self.contentLayout)
 
         self._last_preview = None
 
@@ -219,12 +226,19 @@ class TaskCard(HeaderCardWidget):
         self.statusLayout.addWidget(self.statusLabel)
         self.statusLayout.addStretch(1)
 
-        self.viewLayout.addWidget(self.historyEdit)
-        self.viewLayout.addWidget(CaptionLabel("快捷任务", self))
-        self.viewLayout.addLayout(self.quickLayout)
-        self.viewLayout.addWidget(self.inputEdit)
-        self.viewLayout.addLayout(self.buttonLayout)
-        self.viewLayout.addLayout(self.statusLayout)
+        self.contentLayout = QVBoxLayout()
+        self.contentLayout.setContentsMargins(0, 0, 0, 0)
+        self.contentLayout.setSpacing(10)
+        self.contentLayout.addWidget(self.historyEdit)
+        self.contentLayout.addWidget(CaptionLabel("快捷任务", self))
+        self.contentLayout.addLayout(self.quickLayout)
+        self.contentLayout.addWidget(self.inputEdit)
+        self.contentLayout.addLayout(self.buttonLayout)
+        self.contentLayout.addLayout(self.statusLayout)
+
+        # Same composition pattern as the official SystemRequirementCard demo:
+        # one internal vertical layout is attached to HeaderCardWidget.viewLayout.
+        self.viewLayout.addLayout(self.contentLayout)
 
         self.append_assistant(
             "可以直接说：\n"

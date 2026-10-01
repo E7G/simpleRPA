@@ -815,6 +815,11 @@ class Action:
                         except Exception:
                             pass
 
+                provider.status_callback = (
+                    lambda message: emit_trace("recover", message)
+                )
+                provider.cancel_callback = should_stop
+
                 cleanup_steps = int(self.params.get('cleanup_steps', 4))
                 long_running = bool(int(self.params.get('long_running', 1)))
 
@@ -853,7 +858,7 @@ class Action:
                     event_callback=emit_trace,
                 )
 
-                if int(self.params.get('return_home', 1)) != 0:
+                if int(self.params.get('return_home', 0)) != 0:
                     try:
                         navigator.recover_safe_navigation(
                             capture=capture,
@@ -1500,7 +1505,7 @@ class ActionManager:
             'params': [
                 {'name': 'instruction', 'type': 'str', 'default': '领取当前页面可以免费领取的奖励', 'description': '直接用自然语言描述完整任务'},
                 {'name': 'prepare_navigation', 'type': 'int', 'default': 1, 'description': '任务前自动关闭公告/普通弹窗(1开/0关)'},
-                {'name': 'return_home', 'type': 'int', 'default': 1, 'description': '任务完成后自动视觉返回首页(1开/0关)'},
+                {'name': 'return_home', 'type': 'int', 'default': 0, 'description': '任务完成后自动视觉返回首页(1开/0关，默认停在完成页)'},
                 {'name': 'cleanup_steps', 'type': 'int', 'default': 4, 'description': '任务前后页面整理最大步骤数'},
                 {'name': 'max_steps', 'type': 'int', 'default': 30, 'description': '长任务检查点步数（不是硬终止上限）'},
                 {'name': 'long_running', 'type': 'int', 'default': 1, 'description': '长任务持续运行模式(1开/0关)'},

@@ -195,6 +195,7 @@ class MainWindow(MSFluentWindow):
         
         self._offscreen_cb = CheckBox("离屏后台(隐藏图标)")
         self._offscreen_cb.setToolTip("把目标窗口移到屏幕外并隐藏任务栏图标，结束后自动恢复")
+        self._offscreen_cb.toggled.connect(self._on_offscreen_mode_changed)
         tb.addWidget(self._offscreen_cb)
         
         tb.addStretch()
@@ -525,6 +526,13 @@ class MainWindow(MSFluentWindow):
                 if route_key:
                     self._tab_files[route_key] = filepath
     
+    def _on_offscreen_mode_changed(self, checked):
+        self._config.run_window_offscreen = bool(checked)
+        try:
+            self._config.save()
+        except Exception:
+            pass
+
     def _save_settings(self):
         geometry = self.geometry()
         self._config.set_window_geometry(
@@ -1023,6 +1031,15 @@ class MainWindow(MSFluentWindow):
             return
 
         self._on_ai_assistant_window_selected(hwnd)
+
+        # Dashboard and main toolbar share the same persisted offscreen setting.
+        # Sync the visible toolbar checkbox before executing the AI task.
+        shared_offscreen = bool(self._config.run_window_offscreen)
+        if self._offscreen_cb.isChecked() != shared_offscreen:
+            self._offscreen_cb.blockSignals(True)
+            self._offscreen_cb.setChecked(shared_offscreen)
+            self._offscreen_cb.blockSignals(False)
+
         options = self.aiInterface.get_task_options()
         params = ActionManager.get_default_params(ActionType.AI_VISUAL_TASK)
         params['instruction'] = text
@@ -1218,7 +1235,7 @@ class MainWindow(MSFluentWindow):
         # remains available for scripts that explicitly want off-screen relocation.
         background_action = bool(target_action.background_mode)
         offscreen_requested = bool(
-            selected_hwnd and self._offscreen_cb.isChecked()
+            selected_hwnd and self._config.run_window_offscreen
         )
         offscreen_supported = (
             can_actions_run_offscreen(

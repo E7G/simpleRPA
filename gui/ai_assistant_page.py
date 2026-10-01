@@ -28,8 +28,6 @@ class AIToolBar(QWidget):
         self.subtitleLabel = CaptionLabel(
             "选择目标窗口，然后直接用自然语言描述任务。", self
         )
-        self.themeButton = PushButton("切换主题", self)
-        self.themeButton.setFixedWidth(108)
 
         self.vBoxLayout = QVBoxLayout(self)
         self.buttonLayout = QHBoxLayout()
@@ -47,10 +45,7 @@ class AIToolBar(QWidget):
         self.buttonLayout.setSpacing(4)
         self.buttonLayout.setContentsMargins(0, 0, 0, 0)
         self.buttonLayout.addStretch(1)
-        self.buttonLayout.addWidget(self.themeButton, 0, Qt.AlignRight)
         self.buttonLayout.setAlignment(Qt.AlignVCenter | Qt.AlignRight)
-
-        self.themeButton.clicked.connect(lambda: toggleTheme(True))
 
 
 class ExampleCard(QWidget):
@@ -361,6 +356,11 @@ class SettingsPanel(QWidget):
         self.applyButton = PrimaryPushButton(FIF.SETTING, "应用 Agnes 配置", self)
         self.applyButton.clicked.connect(self.apply_config)
 
+        self.themeButton = PushButton("切换浅色 / 深色", self)
+        self.themeButton.clicked.connect(lambda: toggleTheme(True))
+
+        self.vBoxLayout.addWidget(CaptionLabel("界面主题", self))
+        self.vBoxLayout.addWidget(self.themeButton)
         self.vBoxLayout.addWidget(CaptionLabel("Agnes API Key（仅当前会话）", self))
         self.vBoxLayout.addWidget(self.apiKeyEdit)
         self.vBoxLayout.addWidget(CaptionLabel("模型", self))

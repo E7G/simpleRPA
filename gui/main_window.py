@@ -1,6 +1,7 @@
 import sys
 import os
 import threading
+import queue
 import webbrowser
 from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout,
@@ -54,6 +55,7 @@ class MainWindow(MSFluentWindow):
     _update_action_start_signal = pyqtSignal(object, int, str)
     _update_available_signal = pyqtSignal(object)
     _update_window_error_signal = pyqtSignal(object, int, str)
+    _ai_trace_signal = pyqtSignal(str, str)
     
     def __init__(self):
         super().__init__()
@@ -90,6 +92,7 @@ class MainWindow(MSFluentWindow):
         self._update_action_start_signal.connect(self._on_player_action_start_gui)
         self._update_available_signal.connect(self._on_update_available)
         self._update_window_error_signal.connect(self._on_window_error_gui)
+        self._ai_trace_signal.connect(self._on_ai_trace_gui)
         
         self._update_checker = UpdateChecker(APP_VERSION)
         self._check_for_update()
@@ -1019,9 +1022,67 @@ class MainWindow(MSFluentWindow):
         self._script_editor.add_action(action)
         self._set_current_tab_modified(True)
 
+    def _get_active_ai_long_action(self):
+        player = self._get_current_player()
+        if not player or player.state not in {PlayerState.PLAYING, PlayerState.PAUSED}:
+            return None
+
+        index = int(getattr(player, 'current_index', -1))
+        if index < 0 or index >= len(player.actions):
+            return None
+
+        action = player.actions[index]
+        if action.action_type != ActionType.AI_VISUAL_TASK:
+            return None
+        if int(action.params.get('long_running', 1)) == 0:
+            return None
+        return action
+
+    def _on_ai_trace_gui(self, kind: str, message: str):
+        if not hasattr(self, 'aiInterface'):
+            return
+
+        prefix = {
+            "start": "▶",
+            "observe": "👁",
+            "decision": "🧠",
+            "click": "🖱",
+            "wait": "⏳",
+            "recover": "↻",
+            "verify": "✓?",
+            "correction": "✎",
+            "done": "✓",
+            "stop": "■",
+        }.get(kind, "•")
+        self.aiInterface.append_trace(f"{prefix} {message}")
+
+        if kind == "recover":
+            self.aiInterface.set_status("长任务自动恢复中…", running=True)
+        elif kind == "correction":
+            self.aiInterface.set_status("长任务运行中 · 已应用新的指正", running=True)
+        elif kind == "done":
+            self.aiInterface.set_status("长任务完成", running=False)
+
     def _on_ai_assistant_task(self, instruction: str, run_now: bool = False):
         text = (instruction or "").strip()
         if not text:
+            return
+
+        active_action = self._get_active_ai_long_action()
+        if active_action is not None:
+            correction_queue = getattr(active_action, '_ai_correction_queue', None)
+            if correction_queue is None:
+                correction_queue = queue.Queue()
+                active_action._ai_correction_queue = correction_queue
+            correction_queue.put(text)
+            self.aiInterface.append_assistant(
+                "已把这条内容作为当前长任务的中途指正，下一次视觉判断立即生效。"
+            )
+            self.aiInterface.append_trace(f"✎ 用户指正已排队：{text}")
+            self.aiInterface.set_status(
+                "长任务运行中 · 等待下一步应用指正",
+                running=True,
+            )
             return
 
         hwnd = self.aiInterface.get_selected_hwnd()
@@ -1216,6 +1277,21 @@ class MainWindow(MSFluentWindow):
         # 否则 player 会沿用上一次运行时缓存的旧 hwnd（_window_offset_provider），
         # 导致换了新窗口后仍校验旧窗口、报“旧窗口不存在”。
         target_action = actions[index]
+
+        if target_action.action_type == ActionType.AI_VISUAL_TASK:
+            target_action._ai_correction_queue = queue.Queue()
+            target_action._on_ai_trace = (
+                lambda kind, message: self._ai_trace_signal.emit(
+                    str(kind),
+                    str(message),
+                )
+            )
+            if hasattr(self, 'aiInterface'):
+                self.aiInterface.clear_trace()
+                self.aiInterface.append_trace(
+                    "▶ Agent 会话已建立。执行过程中可直接在上方输入框发送指正。"
+                )
+
         if target_action.action_type in [ActionType.MOUSE_CLICK_RELATIVE, ActionType.MOUSE_MOVE_RELATIVE]:
             target_action.use_relative_coords = True
         if window_title:

@@ -37,7 +37,7 @@ class AIAssistantLayoutTests(unittest.TestCase):
         self.assertIsInstance(page.settingsPanel.autoCleanupSwitch, SwitchButton)
         self.assertIsInstance(page.settingsPanel.returnHomeSwitch, SwitchButton)
         self.assertIsInstance(page.settingsPanel.backgroundSwitch, SwitchButton)
-        self.assertIsInstance(page.toolBar.themeButton, PushButton)
+        self.assertIsInstance(page.settingsPanel.themeButton, PushButton)
 
         cards = [page.targetCard, page.taskCard, page.settingsCard]
         previous_bottom = -1

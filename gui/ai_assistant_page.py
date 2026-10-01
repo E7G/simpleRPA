@@ -172,6 +172,8 @@ class TargetPanel(QWidget):
         self._preview_failures = 0
         self._live_page_active = True
         self._frame_times = deque(maxlen=90)
+        self._preview_clicker = None
+        self._preview_clicker_hwnd = None
 
         self.preview_result.connect(self._on_preview_result)
 
@@ -220,6 +222,9 @@ class TargetPanel(QWidget):
         self.stateLabel.setText(f"实时预览：{title or hwnd}")
         self.window_selected.emit(hwnd)
         self._preview_failures = 0
+        self._preview_clicker = None
+        self._preview_clicker_hwnd = None
+        self._frame_times.clear()
         self._update_live_timer()
         self._request_live_frame(force=True)
 
@@ -278,7 +283,11 @@ class TargetPanel(QWidget):
         try:
             from utils.background_click import create_background_clicker
 
-            clicker = create_background_clicker(hwnd=hwnd)
+            if self._preview_clicker is None or self._preview_clicker_hwnd != hwnd:
+                self._preview_clicker = create_background_clicker(hwnd=hwnd)
+                self._preview_clicker_hwnd = hwnd
+
+            clicker = self._preview_clicker
             if not clicker:
                 raise RuntimeError("无法创建后台截图器")
 

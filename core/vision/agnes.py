@@ -7,6 +7,8 @@ import urllib.error
 import urllib.request
 from typing import Any, Dict, Optional
 
+from .example_knowledge import select_example_context
+
 
 class AgnesVisionError(RuntimeError):
     pass
@@ -101,6 +103,10 @@ class AgnesVisionProvider:
             "真正需要阻止的是点击后会扣除货币、消耗资源、发生支付或购买。"
             "如果任务是领取当前可领取的免费奖励，遇到未来天数、未解锁、前置条件未完成或当前不可领取的奖励时应直接跳过；"
             "当已经没有当前可免费领取的奖励时，应返回 done，而不是 blocked。"
+            "上下文里如果提供了用户已有的历史 RPA 示例，必须把它们当作 few-shot 流程经验："
+            "优先参考旧流程的页面顺序、入口区域、返回路径、循环条件和等待节奏；"
+            "但旧坐标只能作为区域提示，每一步仍必须用当前截图验证语义目标后再点击。"
+            "不要因为用户只说一句简短目标就忽略这些示例，也不要在尚可按历史路径继续导航时过早返回 blocked。"
         )
         user_text = f"任务：{instruction}\n输出格式：{schema_hint}"
         if context:
@@ -168,11 +174,16 @@ class AgnesVisionProvider:
         return result
 
     def next_action(self, image, instruction: str, context: str = "") -> Dict[str, Any]:
+        example_context = select_example_context(instruction)
+        runtime_context = (
+            example_context
+            + ("\n\n当前本次执行历史：\n" + context if context else "")
+        )
         result = self._request(
             image,
             instruction,
             '{"status":"continue|done|blocked","action":"click|wait|none","x":0-1000,"y":0-1000,"target":"要操作的控件","confidence":0-1,"reason":"简短原因"}',
-            context=context,
+            context=runtime_context,
         )
         result.setdefault("status", "blocked")
         result.setdefault("action", "none")

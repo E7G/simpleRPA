@@ -12,7 +12,7 @@ from qfluentwidgets import (
     PushButton, PrimaryPushButton,
     ImageLabel, TitleLabel, BodyLabel, CaptionLabel,
     InfoBar, InfoBarPosition, IndeterminateProgressRing,
-    FluentIcon as FIF,
+    CardWidget, FluentIcon as FIF,
     ConfigItem, BoolValidator, qconfig, setTheme,
 )
 
@@ -442,9 +442,31 @@ class AIAssistantPage(ScrollArea):
         # OptionsSettingCard updates qconfig.themeMode itself. Because this page
         # uses the global qconfig item directly, refresh the Fluent stylesheet after
         # the option changes (the official demo does this via its own cfg.themeChanged).
-        self.themeCard.optionChanged.connect(
-            lambda _: setTheme(qconfig.get(qconfig.themeMode))
-        )
+        self.themeCard.optionChanged.connect(self._on_theme_option_changed)
+        qconfig.themeChangedFinished.connect(self._refresh_fluent_surfaces)
+
+    def _on_theme_option_changed(self, _):
+        setTheme(qconfig.get(qconfig.themeMode))
+
+    def _refresh_fluent_surfaces(self):
+        # CardWidget keeps an animated backgroundColor property. Refresh it
+        # after the library has swapped light/dark stylesheets.
+        for card in self.findChildren(CardWidget):
+            try:
+                card._updateBackgroundColor()
+            except Exception:
+                pass
+
+        window = self.window()
+        if window and hasattr(window, "_updateStackedBackground"):
+            try:
+                window._updateStackedBackground()
+            except Exception:
+                pass
+
+        self.update()
+        self.viewport().update()
+        self.view.update()
 
     def _on_submit(self, text, run_now):
         if not self.get_selected_hwnd():

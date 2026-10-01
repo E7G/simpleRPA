@@ -1,5 +1,6 @@
 import unittest
 
+from core.actions import ActionManager, ActionType
 from core.vision.agnes import AgnesVisionProvider
 from core.vision.navigator import VisualNavigator
 
@@ -31,6 +32,17 @@ class FakeProvider:
 
 
 class VisionCoreTests(unittest.TestCase):
+    def test_ai_actions_registered(self):
+        expected = {
+            ActionType.AI_VISUAL_CLICK,
+            ActionType.AI_VISUAL_CHECK,
+            ActionType.AI_VISUAL_NAVIGATE,
+            ActionType.AI_VISUAL_TASK,
+        }
+        categories = ActionManager.get_all_categories()
+        self.assertIn("AI视觉", categories)
+        self.assertTrue(expected.issubset(set(categories["AI视觉"])))
+
     def test_normalized_to_pixel(self):
         point = AgnesVisionProvider.normalized_to_pixel({"x": 500, "y": 250}, (400, 800))
         self.assertEqual(point, (200, 200))

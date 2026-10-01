@@ -222,6 +222,11 @@ class TargetPanel(QWidget):
         self.stateLabel.setText(f"实时预览：{title or hwnd}")
         self.window_selected.emit(hwnd)
         self._preview_failures = 0
+        if self._preview_clicker is not None:
+            try:
+                self._preview_clicker.close()
+            except Exception:
+                pass
         self._preview_clicker = None
         self._preview_clicker_hwnd = None
         self._frame_times.clear()
@@ -291,7 +296,7 @@ class TargetPanel(QWidget):
             if not clicker:
                 raise RuntimeError("无法创建后台截图器")
 
-            image = clicker.capture(background=True)
+            image = clicker.capture_realtime()
             if image is None:
                 raise RuntimeError("后台窗口截图失败")
 

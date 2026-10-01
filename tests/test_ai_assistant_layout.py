@@ -4,7 +4,11 @@ import unittest
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PyQt5.QtWidgets import QApplication
-from qfluentwidgets import Theme, setTheme
+from qfluentwidgets import (
+    Theme, setTheme, ScrollArea, HeaderCardWidget,
+    GroupHeaderCardWidget, SettingCardGroup, TextEdit,
+    PasswordLineEdit, OptionsSettingCard, SwitchSettingCard,
+)
 
 from gui.ai_assistant_page import AIAssistantPage
 
@@ -21,36 +25,45 @@ class AIAssistantLayoutTests(unittest.TestCase):
         page.show()
         self.app.processEvents()
 
-        widgets = [
-            page._left_column,
-            page._target_card,
-            page._settings_card,
-            page._chat_card,
-            page._history,
-            page._input,
-            page._run_btn,
-            page._preview,
+        self.assertIsInstance(page, ScrollArea)
+        self.assertIsInstance(page.targetCard, HeaderCardWidget)
+        self.assertIsInstance(page.taskCard, HeaderCardWidget)
+        self.assertIsInstance(page.connectionCard, GroupHeaderCardWidget)
+        self.assertIsInstance(page.behaviorGroup, SettingCardGroup)
+
+        self.assertIsInstance(page.taskCard.historyEdit, TextEdit)
+        self.assertIsInstance(page.taskCard.inputEdit, TextEdit)
+        self.assertIsInstance(page.connectionCard.apiKeyEdit, PasswordLineEdit)
+        self.assertIsInstance(page.themeCard, OptionsSettingCard)
+        self.assertIsInstance(page.autoCleanupCard, SwitchSettingCard)
+        self.assertIsInstance(page.returnHomeCard, SwitchSettingCard)
+        self.assertIsInstance(page.backgroundCard, SwitchSettingCard)
+
+        cards = [
+            page.targetCard,
+            page.taskCard,
+            page.connectionCard,
+            page.behaviorGroup,
         ]
-        for widget in widgets:
-            rect = widget.geometry()
-            self.assertGreater(rect.width(), 20)
-            self.assertGreater(rect.height(), 20)
-            self.assertGreaterEqual(rect.x(), 0)
-            self.assertGreaterEqual(rect.y(), 0)
+        previous_bottom = -1
+        for card in cards:
+            rect = card.geometry()
+            self.assertGreater(rect.width(), 700)
+            self.assertGreater(rect.height(), 40)
+            self.assertGreaterEqual(rect.x(), 20)
+            self.assertGreater(rect.y(), previous_bottom)
+            previous_bottom = rect.bottom()
 
-        left = page._left_column.geometry()
-        chat = page._chat_card.geometry()
-        self.assertGreaterEqual(chat.x(), left.x() + left.width())
-        self.assertGreaterEqual(chat.width(), 500)
-        self.assertGreaterEqual(page._history.height(), 250)
-        self.assertGreaterEqual(page._input.height(), 90)
-        self.assertGreater(page._input.geometry().top(), page._history.geometry().bottom())
+        self.assertGreaterEqual(page.taskCard.historyEdit.height(), 250)
+        self.assertGreaterEqual(page.taskCard.inputEdit.height(), 90)
+        self.assertGreater(
+            page.taskCard.inputEdit.geometry().top(),
+            page.taskCard.historyEdit.geometry().bottom(),
+        )
 
-        self.assertEqual(page._history.__class__.__name__, "TextEdit")
-        self.assertEqual(page._input.__class__.__name__, "TextEdit")
-        self.assertEqual(page._api_key.__class__.__name__, "PasswordLineEdit")
-        self.assertEqual(page._preview.__class__.__name__, "ImageLabel")
-        self.assertEqual(page._theme.__class__.__name__, "ComboBox")
+        self.assertTrue(page.autoCleanupCard.isChecked())
+        self.assertTrue(page.returnHomeCard.isChecked())
+        self.assertTrue(page.backgroundCard.isChecked())
 
         page.close()
         page.deleteLater()

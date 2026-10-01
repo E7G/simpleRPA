@@ -800,6 +800,24 @@ class MainWindow(MSFluentWindow):
             if hasattr(self.dashboardInterface, 'export_python'):
                 self.dashboardInterface.export_python()
                 return
+
+        actions = self._script_editor.get_actions()
+        ai_types = {
+            ActionType.AI_VISUAL_CLICK,
+            ActionType.AI_VISUAL_CHECK,
+            ActionType.AI_VISUAL_NAVIGATE,
+            ActionType.AI_VISUAL_TASK,
+        }
+        if any(action.action_type in ai_types for action in actions):
+            box = MessageBox(
+                'AI视觉脚本暂不支持独立Python导出',
+                '当前流程包含 Agnes AI 视觉动作。请保存为 .rpa.json 后在 simpleRPA 中运行，避免导出时静默丢失 AI 步骤。',
+                self
+            )
+            box.yesButton.setText('确定')
+            box.cancelButton.hide()
+            box.exec()
+            return
         
         filepath, _ = QFileDialog.getSaveFileName(
             self, "导出Python脚本", "",

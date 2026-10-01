@@ -803,6 +803,14 @@ class Player:
             self.state = PlayerState.IDLE
         return True
 
+    def _should_stop_action(self) -> bool:
+        """Pause-aware stop callback passed into long-running actions."""
+        while not self._pause_event.is_set():
+            if self._stop_flag:
+                return True
+            time.sleep(0.05)
+        return bool(self._stop_flag)
+
     def _interruptible_sleep(self, seconds: float):
 
         end_time = time.time() + seconds
@@ -1060,7 +1068,7 @@ class Player:
 
                 try:
 
-                    success = action.execute(window_offset=current_offset, should_stop=lambda: self._stop_flag, local_group_manager=self._local_group_manager)
+                    success = action.execute(window_offset=current_offset, should_stop=self._should_stop_action, local_group_manager=self._local_group_manager)
 
                     self._emit('on_action_end', action, i, success)
 
@@ -1250,7 +1258,7 @@ class Player:
 
             try:
 
-                success = action.execute(window_offset=current_offset, should_stop=lambda: self._stop_flag, local_group_manager=self._local_group_manager)
+                success = action.execute(window_offset=current_offset, should_stop=self._should_stop_action, local_group_manager=self._local_group_manager)
 
                 self._emit('on_action_end', action, index, success)
 

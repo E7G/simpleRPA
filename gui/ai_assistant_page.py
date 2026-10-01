@@ -9,9 +9,9 @@ from PyQt5.QtGui import QImage, QPixmap
 from qfluentwidgets import (
     ScrollArea, TitleLabel, StrongBodyLabel, BodyLabel, CaptionLabel,
     TextEdit, LineEdit, PasswordLineEdit,
-    PushButton, PrimaryPushButton, ToolButton, SwitchButton,
+    PushButton, PrimaryPushButton, SwitchButton,
     ImageLabel, InfoBar, InfoBarPosition, IndeterminateProgressRing,
-    ToolTipFilter, FluentIcon as FIF,
+    FluentIcon as FIF,
     qconfig, toggleTheme, isDarkTheme,
 )
 
@@ -28,7 +28,7 @@ class AIToolBar(QWidget):
         self.subtitleLabel = CaptionLabel(
             "选择目标窗口，然后直接用自然语言描述任务。", self
         )
-        self.themeButton = ToolButton(FIF.CONSTRACT, self)
+        self.themeButton = PushButton(FIF.CONSTRACT, "切换主题", self)
 
         self.vBoxLayout = QVBoxLayout(self)
         self.buttonLayout = QHBoxLayout()
@@ -49,8 +49,6 @@ class AIToolBar(QWidget):
         self.buttonLayout.addWidget(self.themeButton, 0, Qt.AlignRight)
         self.buttonLayout.setAlignment(Qt.AlignVCenter | Qt.AlignRight)
 
-        self.themeButton.installEventFilter(ToolTipFilter(self.themeButton))
-        self.themeButton.setToolTip("切换浅色 / 深色主题")
         self.themeButton.clicked.connect(lambda: toggleTheme(True))
 
 

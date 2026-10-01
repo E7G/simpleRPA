@@ -23,6 +23,10 @@ class ActionType(Enum):
     IMAGE_CLICK = "image_click"
     IMAGE_WAIT_CLICK = "image_wait_click"
     IMAGE_CHECK = "image_check"
+    AI_VISUAL_CLICK = "ai_visual_click"
+    AI_VISUAL_CHECK = "ai_visual_check"
+    AI_VISUAL_NAVIGATE = "ai_visual_navigate"
+    AI_VISUAL_TASK = "ai_visual_task"
     ACTION_GROUP_REF = "action_group_ref"
 
 
@@ -69,6 +73,10 @@ OFFSCREEN_BACKGROUND_ACTION_TYPES = {
     ActionType.IMAGE_CLICK,
     ActionType.IMAGE_WAIT_CLICK,
     ActionType.IMAGE_CHECK,
+    ActionType.AI_VISUAL_CLICK,
+    ActionType.AI_VISUAL_CHECK,
+    ActionType.AI_VISUAL_NAVIGATE,
+    ActionType.AI_VISUAL_TASK,
     ActionType.SCREENSHOT,
 }
 
@@ -99,6 +107,10 @@ class Action:
                 name_without_ext = os.path.splitext(image_name)[0]
                 safe_name = name_without_ext.replace(' ', '_').replace('-', '_')
                 return f"${safe_name}"
+        if self.action_type == ActionType.AI_VISUAL_CHECK:
+            var_name = str(self.params.get('result_var', 'ai_found')).strip() or 'ai_found'
+            safe_name = var_name.replace(' ', '_').replace('-', '_')
+            return f"${safe_name}"
         return ""
     
     def _generate_description(self) -> str:
@@ -123,6 +135,10 @@ class Action:
             ActionType.IMAGE_CLICK: f"图片点击: {os.path.basename(self.params.get('image_path', ''))}",
             ActionType.IMAGE_WAIT_CLICK: f"等待图片点击: {os.path.basename(self.params.get('image_path', ''))}",
             ActionType.IMAGE_CHECK: f"检查图片: {os.path.basename(self.params.get('image_path', ''))}",
+            ActionType.AI_VISUAL_CLICK: f"AI视觉点击: {self.params.get('target', '')}",
+            ActionType.AI_VISUAL_CHECK: f"AI视觉判断: {self.params.get('query', '')}",
+            ActionType.AI_VISUAL_NAVIGATE: f"AI视觉导航: {self.params.get('goal', '')}",
+            ActionType.AI_VISUAL_TASK: f"AI视觉任务: {self.params.get('instruction', '')}",
             ActionType.ACTION_GROUP_REF: f"📁 动作组引用: {self.params.get('group_name', '未知')}",
         }
         return name_prefix + delay_prefix + desc_map.get(self.action_type, "未知动作") + bg_suffix + repeat_suffix
@@ -296,6 +312,37 @@ class Action:
         location = pyautogui.locateOnScreen(image_path, **locate_kwargs)
         return location, None, False
     
+    def _capture_ai_frame(self, pyautogui):
+        """Capture the current target as a client-area image for AI vision."""
+        if self.background_mode and (self.window_title or self._get_runtime_window_hwnd()):
+            clicker = self._create_background_clicker()
+            if not clicker:
+                raise Exception(f"未找到后台窗口: {self.window_title or self._get_runtime_window_hwnd()}")
+            image = clicker.capture(background=True)
+            if image is None:
+                image = clicker.capture(background=False)
+            if image is None:
+                raise Exception(f"AI视觉后台截图失败: {self.window_title or self._get_runtime_window_hwnd()}")
+            return image, clicker, (0, 0)
+
+        region = self._get_window_client_region()
+        if region:
+            left, top, width, height = region
+            image = pyautogui.screenshot(region=region)
+            return image, None, (left, top)
+
+        image = pyautogui.screenshot()
+        return image, None, (0, 0)
+
+    def _ai_click(self, pyautogui, x: int, y: int, clicker=None, origin=(0, 0)) -> bool:
+        if clicker is not None:
+            result = clicker.click(int(x), int(y), button='left', background=True)
+            if not result.success:
+                raise Exception(result.message or "AI视觉后台点击失败")
+            return True
+        pyautogui.click(int(origin[0] + x), int(origin[1] + y))
+        return True
+
     def _execute_once(self, window_offset: Optional[Tuple[int, int]] = None, should_stop: Optional[Callable[[], bool]] = None, local_group_manager=None) -> bool:
         import pyautogui
 
@@ -635,6 +682,126 @@ class Action:
                 else:
                     var_manager.set(var_name, False)
             
+            elif self.action_type == ActionType.AI_VISUAL_CLICK:
+                from .vision import AgnesVisionProvider, VisualNavigator
+
+                target = str(self.params.get('target', '')).strip()
+                if not target:
+                    raise Exception("AI视觉点击未设置目标描述")
+
+                provider = AgnesVisionProvider()
+                prepare_navigation = int(self.params.get('prepare_navigation', 1)) != 0
+                min_confidence = float(self.params.get('min_confidence', 0.45))
+
+                def capture():
+                    image, _, _ = self._capture_ai_frame(pyautogui)
+                    return image
+
+                def click_client(px, py):
+                    image, clicker, origin = self._capture_ai_frame(pyautogui)
+                    return self._ai_click(pyautogui, px, py, clicker=clicker, origin=origin)
+
+                if prepare_navigation:
+                    navigator = VisualNavigator(provider)
+                    navigator.recover_safe_navigation(
+                        capture=capture,
+                        click=click_client,
+                        should_stop=should_stop,
+                        max_steps=int(self.params.get('prepare_steps', 3)),
+                    )
+
+                image, clicker, origin = self._capture_ai_frame(pyautogui)
+                result = provider.locate(image, target)
+                if not bool(result.get('found', False)):
+                    raise Exception(f"Agnes 未找到目标: {target}")
+                confidence = float(result.get('confidence', 0) or 0)
+                if confidence < min_confidence:
+                    raise Exception(f"Agnes 定位置信度过低: {confidence:.2f} < {min_confidence:.2f}")
+
+                px, py = provider.normalized_to_pixel(result, image.size)
+                self._ai_click(pyautogui, px, py, clicker=clicker, origin=origin)
+
+                var_manager = VariableManager.get_instance()
+                var_manager.set("ai_last_target", result.get('target', target))
+                var_manager.set("ai_last_x", px)
+                var_manager.set("ai_last_y", py)
+                var_manager.set("ai_last_confidence", confidence)
+
+            elif self.action_type == ActionType.AI_VISUAL_CHECK:
+                from .vision import AgnesVisionProvider
+
+                query = str(self.params.get('query', '')).strip()
+                if not query:
+                    raise Exception("AI视觉判断未设置判断内容")
+
+                marker = self.condition_marker
+                var_name = marker[1:] if marker else 'ai_found'
+                image, _, _ = self._capture_ai_frame(pyautogui)
+                provider = AgnesVisionProvider()
+                result = provider.check(image, query)
+                found = bool(result.get('found', False))
+
+                var_manager = VariableManager.get_instance()
+                var_manager.set(var_name, found)
+                var_manager.set(f"{var_name}_confidence", float(result.get('confidence', 0) or 0))
+                if found:
+                    px, py = provider.normalized_to_pixel(result, image.size)
+                    var_manager.set(f"{var_name}_x", px)
+                    var_manager.set(f"{var_name}_y", py)
+                    var_manager.set(f"{var_name}_target", result.get('target', ''))
+
+            elif self.action_type == ActionType.AI_VISUAL_NAVIGATE:
+                from .vision import AgnesVisionProvider, VisualNavigator
+
+                goal = str(self.params.get('goal', '')).strip() or (
+                    "关闭挡住操作的公告或普通提示；如果处于无关子页面则返回上一层或首页"
+                )
+                provider = AgnesVisionProvider()
+                navigator = VisualNavigator(provider)
+
+                def capture():
+                    image, _, _ = self._capture_ai_frame(pyautogui)
+                    return image
+
+                def click_client(px, py):
+                    _, clicker, origin = self._capture_ai_frame(pyautogui)
+                    return self._ai_click(pyautogui, px, py, clicker=clicker, origin=origin)
+
+                navigator.recover_safe_navigation(
+                    capture=capture,
+                    click=click_client,
+                    goal=goal,
+                    should_stop=should_stop,
+                    max_steps=int(self.params.get('max_steps', 4)),
+                )
+
+            elif self.action_type == ActionType.AI_VISUAL_TASK:
+                from .vision import AgnesVisionProvider, VisualNavigator
+
+                instruction = str(self.params.get('instruction', '')).strip()
+                if not instruction:
+                    raise Exception("AI视觉任务未填写任务描述")
+
+                provider = AgnesVisionProvider()
+                navigator = VisualNavigator(provider)
+
+                def capture():
+                    image, _, _ = self._capture_ai_frame(pyautogui)
+                    return image
+
+                def click_client(px, py):
+                    _, clicker, origin = self._capture_ai_frame(pyautogui)
+                    return self._ai_click(pyautogui, px, py, clicker=clicker, origin=origin)
+
+                navigator.run(
+                    instruction=instruction,
+                    capture=capture,
+                    click=click_client,
+                    should_stop=should_stop,
+                    max_steps=int(self.params.get('max_steps', 10)),
+                    settle_seconds=float(self.params.get('settle_seconds', 0.7)),
+                )
+
             elif self.action_type == ActionType.ACTION_GROUP_REF:
                 from .action_group import ensure_action_group_available, GlobalActionGroupManager
                 group_name = self.params.get('group_name', '')
@@ -1229,6 +1396,41 @@ class ActionManager:
             'params': [
                 {'name': 'image_path', 'type': 'str', 'default': '', 'description': '图片路径'},
                 {'name': 'confidence', 'type': 'float', 'default': 0.9, 'description': '匹配精度(0-1)'},
+            ]
+        },
+        ActionType.AI_VISUAL_CLICK: {
+            'name': 'AI视觉点击',
+            'category': 'AI视觉',
+            'params': [
+                {'name': 'target', 'type': 'str', 'default': '关闭公告', 'description': '用自然语言描述要点击的目标'},
+                {'name': 'prepare_navigation', 'type': 'int', 'default': 1, 'description': '点击前自动清理公告/普通弹窗(1开/0关)'},
+                {'name': 'prepare_steps', 'type': 'int', 'default': 3, 'description': '自动整理页面最大步骤数'},
+                {'name': 'min_confidence', 'type': 'float', 'default': 0.45, 'description': '最低视觉定位置信度(0-1)'},
+            ]
+        },
+        ActionType.AI_VISUAL_CHECK: {
+            'name': 'AI视觉判断',
+            'category': 'AI视觉',
+            'params': [
+                {'name': 'query', 'type': 'str', 'default': '当前是否有可领取按钮', 'description': '用自然语言描述判断条件'},
+                {'name': 'result_var', 'type': 'str', 'default': 'ai_found', 'description': '结果变量名（条件中使用 $变量名）'},
+            ]
+        },
+        ActionType.AI_VISUAL_NAVIGATE: {
+            'name': 'AI视觉导航',
+            'category': 'AI视觉',
+            'params': [
+                {'name': 'goal', 'type': 'str', 'default': '关闭公告和普通提示，必要时返回首页', 'description': '导航目标'},
+                {'name': 'max_steps', 'type': 'int', 'default': 4, 'description': '最大视觉导航步骤数'},
+            ]
+        },
+        ActionType.AI_VISUAL_TASK: {
+            'name': 'AI视觉任务',
+            'category': 'AI视觉',
+            'params': [
+                {'name': 'instruction', 'type': 'str', 'default': '关闭公告并返回首页', 'description': '直接用自然语言描述完整任务'},
+                {'name': 'max_steps', 'type': 'int', 'default': 10, 'description': '最大视觉操作步骤数'},
+                {'name': 'settle_seconds', 'type': 'float', 'default': 0.7, 'description': '每次点击后等待界面稳定秒数'},
             ]
         },
         ActionType.ACTION_GROUP_REF: {

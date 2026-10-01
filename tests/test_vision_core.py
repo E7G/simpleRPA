@@ -83,6 +83,38 @@ class FocusedD4Provider:
         return {"found": False, "confidence": 0.95}
 
 
+class LongTaskProvider:
+    @staticmethod
+    def normalized_to_pixel(result, image_size):
+        return AgnesVisionProvider.normalized_to_pixel(result, image_size)
+
+    def __init__(self, clicks_before_done=6, transient_failures=0):
+        self.calls = 0
+        self.clicks_before_done = clicks_before_done
+        self.transient_failures = transient_failures
+        self.contexts = []
+
+    def next_action(self, image, instruction, context=""):
+        self.calls += 1
+        self.contexts.append(context)
+
+        if self.transient_failures > 0:
+            self.transient_failures -= 1
+            raise RuntimeError("temporary provider timeout")
+
+        if self.calls <= self.clicks_before_done:
+            return {
+                "status": "continue",
+                "action": "click",
+                "x": 500,
+                "y": 500,
+                "target": f"步骤{self.calls}",
+                "confidence": 0.9,
+            }
+
+        return {"status": "done", "action": "none", "reason": "任务完成"}
+
+
 class VisionCoreTests(unittest.TestCase):
     def test_ai_actions_registered(self):
         expected = {
@@ -139,6 +171,55 @@ class VisionCoreTests(unittest.TestCase):
         self.assertEqual(clicks, [(312, 344)])
         self.assertGreaterEqual(provider.check_calls, 3)
         self.assertGreaterEqual(provider.next_calls, 3)
+
+    def test_long_task_continues_beyond_soft_step_checkpoint(self):
+        provider = LongTaskProvider(clicks_before_done=6)
+        navigator = VisualNavigator(provider)
+        clicks = []
+
+        result = navigator.run(
+            instruction="执行一个长任务",
+            capture=lambda: FakeImage(),
+            click=lambda x, y: clicks.append((x, y)) or True,
+            max_steps=2,
+            settle_seconds=0,
+            long_running=True,
+            max_runtime_seconds=120,
+            retry_limit=5,
+        )
+
+        self.assertTrue(result)
+        self.assertEqual(len(clicks), 6)
+        self.assertGreater(provider.calls, 2)
+        self.assertEqual(navigator.last_session_state["state"], "done")
+        self.assertGreaterEqual(navigator.last_session_state["step"], 7)
+        self.assertTrue(any("长任务检查点" in c for c in provider.contexts))
+
+    def test_long_task_recovers_from_transient_provider_failures(self):
+        provider = LongTaskProvider(clicks_before_done=1, transient_failures=2)
+        navigator = VisualNavigator(provider)
+        clicks = []
+
+        result = navigator.run(
+            instruction="执行一个长任务",
+            capture=lambda: FakeImage(),
+            click=lambda x, y: clicks.append((x, y)) or True,
+            max_steps=2,
+            settle_seconds=0,
+            long_running=True,
+            max_runtime_seconds=120,
+            retry_limit=4,
+        )
+
+        self.assertTrue(result)
+        self.assertEqual(len(clicks), 1)
+        self.assertEqual(navigator.last_session_state["state"], "done")
+
+    def test_ai_task_defaults_to_long_running_session(self):
+        params = ActionManager.get_default_params(ActionType.AI_VISUAL_TASK)
+        self.assertEqual(params["long_running"], 1)
+        self.assertEqual(params["max_runtime_minutes"], 120)
+        self.assertGreaterEqual(params["retry_limit"], 10)
 
     def test_visual_navigator_bounded_click_loop(self):
         provider = FakeProvider()

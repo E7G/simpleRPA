@@ -809,8 +809,13 @@ class Action:
                     capture=capture,
                     click=click_client,
                     should_stop=should_stop,
-                    max_steps=int(self.params.get('max_steps', 10)),
+                    max_steps=int(self.params.get('max_steps', 30)),
                     settle_seconds=float(self.params.get('settle_seconds', 0.7)),
+                    long_running=bool(int(self.params.get('long_running', 1))),
+                    max_runtime_seconds=60.0 * float(
+                        self.params.get('max_runtime_minutes', 120)
+                    ),
+                    retry_limit=int(self.params.get('retry_limit', 10)),
                 )
 
                 if int(self.params.get('return_home', 1)) != 0:
@@ -1452,7 +1457,10 @@ class ActionManager:
                 {'name': 'prepare_navigation', 'type': 'int', 'default': 1, 'description': '任务前自动关闭公告/普通弹窗(1开/0关)'},
                 {'name': 'return_home', 'type': 'int', 'default': 1, 'description': '任务完成后自动视觉返回首页(1开/0关)'},
                 {'name': 'cleanup_steps', 'type': 'int', 'default': 4, 'description': '任务前后页面整理最大步骤数'},
-                {'name': 'max_steps', 'type': 'int', 'default': 30, 'description': '业务任务最大视觉操作步骤数'},
+                {'name': 'max_steps', 'type': 'int', 'default': 30, 'description': '长任务检查点步数（不是硬终止上限）'},
+                {'name': 'long_running', 'type': 'int', 'default': 1, 'description': '长任务持续运行模式(1开/0关)'},
+                {'name': 'max_runtime_minutes', 'type': 'int', 'default': 120, 'description': '长任务最长运行分钟数'},
+                {'name': 'retry_limit', 'type': 'int', 'default': 10, 'description': '连续临时错误最大自动恢复次数'},
                 {'name': 'settle_seconds', 'type': 'float', 'default': 0.7, 'description': '每次点击后等待界面稳定秒数'},
             ]
         },

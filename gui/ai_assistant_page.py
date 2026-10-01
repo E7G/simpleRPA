@@ -16,6 +16,11 @@ from qfluentwidgets import (
 )
 
 from .widgets import WindowSelector
+from utils.secure_store import (
+    load_saved_agnes_key,
+    save_agnes_key,
+    delete_saved_agnes_key,
+)
 
 
 class AIToolBar(QWidget):
@@ -377,6 +382,18 @@ class SettingsPanel(QWidget):
         self.apiKeyEdit = PasswordLineEdit(self)
         self.apiKeyEdit.setPlaceholderText("Agnes API Key")
 
+        saved_key = None
+        try:
+            saved_key = load_saved_agnes_key()
+        except Exception:
+            saved_key = None
+
+        if saved_key:
+            os.environ["AGNES_API_KEY"] = saved_key
+            self.apiKeyEdit.setText(saved_key)
+        elif os.getenv("AGNES_API_KEY"):
+            self.apiKeyEdit.setText(os.getenv("AGNES_API_KEY"))
+
         self.modelEdit = LineEdit(self)
         self.modelEdit.setText(os.getenv("AGNES_MODEL") or "agnes-3.0-flash")
 
@@ -388,13 +405,46 @@ class SettingsPanel(QWidget):
         self.applyButton = PrimaryPushButton(FIF.SETTING, "应用 Agnes 配置", self)
         self.applyButton.clicked.connect(self.apply_config)
 
+        self.rememberKeySwitch = SwitchButton(self)
+        self.rememberKeySwitch.setChecked(True)
+
+        self.clearSavedKeyButton = PushButton(FIF.DELETE, "清除已保存 Key", self)
+        self.clearSavedKeyButton.clicked.connect(self.clear_saved_key)
+
+        self.keyStatusLabel = CaptionLabel(
+            "已从 Windows 加密存储加载" if saved_key else "尚未保存到 Windows 加密存储",
+            self,
+        )
+        self.keyStatusLabel.setWordWrap(True)
+
         self.themeButton = PushButton("切换浅色 / 深色", self)
         self.themeButton.clicked.connect(lambda: toggleTheme(True))
 
         self.vBoxLayout.addWidget(CaptionLabel("界面主题", self))
         self.vBoxLayout.addWidget(self.themeButton)
-        self.vBoxLayout.addWidget(CaptionLabel("Agnes API Key（仅当前会话）", self))
+        self.vBoxLayout.addWidget(CaptionLabel("Agnes API Key", self))
         self.vBoxLayout.addWidget(self.apiKeyEdit)
+
+        rememberRow = QWidget(self)
+        rememberLayout = QHBoxLayout(rememberRow)
+        rememberLayout.setContentsMargins(0, 4, 0, 4)
+        rememberLayout.setSpacing(10)
+        rememberText = QVBoxLayout()
+        rememberText.setContentsMargins(0, 0, 0, 0)
+        rememberText.setSpacing(1)
+        rememberText.addWidget(BodyLabel("记住 API Key", rememberRow))
+        rememberDesc = CaptionLabel(
+            "使用 Windows DPAPI 按当前用户加密保存，下次启动自动加载",
+            rememberRow,
+        )
+        rememberDesc.setWordWrap(True)
+        rememberText.addWidget(rememberDesc)
+        rememberLayout.addLayout(rememberText, 1)
+        rememberLayout.addWidget(self.rememberKeySwitch, 0, Qt.AlignVCenter)
+        self.vBoxLayout.addWidget(rememberRow)
+        self.vBoxLayout.addWidget(self.keyStatusLabel)
+        self.vBoxLayout.addWidget(self.clearSavedKeyButton)
+
         self.vBoxLayout.addWidget(CaptionLabel("模型", self))
         self.vBoxLayout.addWidget(self.modelEdit)
         self.vBoxLayout.addWidget(CaptionLabel("API Base", self))
@@ -451,12 +501,42 @@ class SettingsPanel(QWidget):
 
         if key:
             os.environ["AGNES_API_KEY"] = key
+            if self.rememberKeySwitch.isChecked():
+                try:
+                    save_agnes_key(key)
+                    self.keyStatusLabel.setText("已使用 Windows DPAPI 加密保存")
+                except Exception as exc:
+                    self.keyStatusLabel.setText(f"加密保存失败：{exc}")
+            else:
+                try:
+                    delete_saved_agnes_key()
+                except Exception:
+                    pass
+                self.keyStatusLabel.setText("仅当前会话使用，不保存")
+        else:
+            os.environ.pop("AGNES_API_KEY", None)
+            try:
+                delete_saved_agnes_key()
+            except Exception:
+                pass
+            self.keyStatusLabel.setText("未配置 API Key")
+
         if model:
             os.environ["AGNES_MODEL"] = model
         if base:
             os.environ["AGNES_API_BASE"] = base
 
         self.config_applied.emit()
+
+    def clear_saved_key(self):
+        try:
+            delete_saved_agnes_key()
+        finally:
+            os.environ.pop("AGNES_API_KEY", None)
+            os.environ.pop("AGNESAI_API_KEY", None)
+            self.apiKeyEdit.clear()
+            self.keyStatusLabel.setText("已清除 Windows 加密保存的 API Key")
+            self.config_applied.emit()
 
     def get_options(self):
         return {

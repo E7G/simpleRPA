@@ -66,6 +66,8 @@ class VisualNavigator:
         long_running: bool = False,
         max_runtime_seconds: float = 7200,
         retry_limit: int = 10,
+        correction_source: Optional[Callable[[], list]] = None,
+        event_callback: Optional[Callable[[str, str], None]] = None,
     ) -> bool:
         """Run a visual task.
 
@@ -97,6 +99,15 @@ class VisualNavigator:
             instruction=instruction,
         )
 
+        def emit(kind: str, message: str):
+            if event_callback:
+                try:
+                    event_callback(kind, message)
+                except Exception:
+                    pass
+
+        emit("start", f"开始长任务：{instruction}" if long_running else f"开始任务：{instruction}")
+
         while True:
             if should_stop and should_stop():
                 self._update_state(
@@ -105,7 +116,24 @@ class VisualNavigator:
                     started_at=started_at,
                     instruction=instruction,
                 )
+                emit("stop", "收到停止请求，结束当前 Agent 会话。")
                 return False
+
+            if correction_source:
+                try:
+                    corrections = correction_source() or []
+                except Exception:
+                    corrections = []
+                for correction in corrections:
+                    correction = str(correction or "").strip()
+                    if not correction:
+                        continue
+                    history.append(
+                        "【用户中途指正】" + correction
+                        + "。从下一步开始优先遵循这条新要求；"
+                        "若与旧目标冲突，以最新用户指正为准。"
+                    )
+                    emit("correction", f"已接收指正：{correction}")
 
             elapsed = time.monotonic() - started_at
             if long_running:
@@ -134,6 +162,7 @@ class VisualNavigator:
 
             step += 1
             context = "；".join(history)
+            emit("observe", f"步骤 {step}：正在获取当前后台画面并分析。")
 
             try:
                 image = capture()
@@ -156,6 +185,7 @@ class VisualNavigator:
                 history.append(
                     f"第{step}步：后台截图临时失败，保持当前任务状态并重试。"
                 )
+                emit("recover", f"步骤 {step}：后台截图失败，自动恢复中（{consecutive_errors}/{retry_limit}）：{exc}")
                 if not self._sleep_interruptible(
                     min(3.0, 0.4 * consecutive_errors),
                     should_stop,
@@ -189,6 +219,7 @@ class VisualNavigator:
                     f"第{step}步：视觉模型请求/解析临时失败，保持当前页面和任务上下文，"
                     "稍后继续，不要重新开始任务。"
                 )
+                emit("recover", f"步骤 {step}：Agnes 暂时失败，保留上下文重试（{consecutive_errors}/{retry_limit}）：{exc}")
                 if not self._sleep_interruptible(
                     min(6.0, 0.7 * consecutive_errors),
                     should_stop,
@@ -208,6 +239,12 @@ class VisualNavigator:
                 instruction=instruction,
                 target=target,
                 reason=reason,
+            )
+            emit(
+                "decision",
+                f"步骤 {step}：判断={status or 'continue'}，动作={action or 'none'}"
+                + (f"，目标={target}" if target else "")
+                + (f"，原因={reason}" if reason else ""),
             )
 
             if status == "done":
@@ -261,6 +298,7 @@ class VisualNavigator:
                             history.append(
                                 f"第{step}步：收尾复核发现 D4/第4天仍可领取，已点击。"
                             )
+                            emit("click", f"步骤 {step}：D4 专项复核发现仍可领取，已点击 ({x}, {y})。")
                             done_confirmations = 0
                             consecutive_errors = 0
                             if not self._sleep_interruptible(
@@ -277,6 +315,7 @@ class VisualNavigator:
                         started_at=started_at,
                         instruction=instruction,
                     )
+                    emit("done", f"任务完成，共执行 {step} 个视觉循环。")
                     return True
 
                 done_confirmations += 1
@@ -287,8 +326,10 @@ class VisualNavigator:
                         started_at=started_at,
                         instruction=instruction,
                     )
+                    emit("done", f"完成复核通过，共执行 {step} 个视觉循环。")
                     return True
 
+                emit("verify", f"步骤 {step}：模型认为完成，正在做第二次全页复核。")
                 history.append(
                     f"第{step}步：模型认为完成；开始收尾复核。"
                     "请逐个扫描整个页面所有亮着/高亮/可领取但尚未领取的奖励，"
@@ -323,6 +364,7 @@ class VisualNavigator:
                         reason or "视觉模型判断当前任务无法继续"
                     )
 
+                emit("recover", f"步骤 {step}：暂时无法继续，尝试恢复：{reason or '原因不明'}")
                 history.append(
                     f"第{step}步：模型暂时无法继续（{reason or '原因不明'}）。"
                     "不要结束整个长任务；重新观察当前页面，优先关闭普通弹窗、"
@@ -339,6 +381,7 @@ class VisualNavigator:
 
             if action == "wait":
                 history.append(f"第{step}步：等待界面变化")
+                emit("wait", f"步骤 {step}：等待页面稳定/加载完成。")
                 if not self._sleep_interruptible(
                     max(0.2, settle_seconds),
                     should_stop,
@@ -381,6 +424,7 @@ class VisualNavigator:
                 history.append(
                     f"第{step}步：点击 {target or (x, y)}"
                 )
+                emit("click", f"步骤 {step}：后台点击 {target or '目标'} @ ({x}, {y})。")
                 if not self._sleep_interruptible(
                     max(0.2, settle_seconds),
                     should_stop,
@@ -412,6 +456,8 @@ class VisualNavigator:
         goal: str = "关闭挡住操作的公告或普通提示；如果明显处于无关子页面则返回上一层或首页，使页面恢复可操作状态",
         should_stop: Optional[Callable[[], bool]] = None,
         max_steps: int = 4,
+        correction_source: Optional[Callable[[], list]] = None,
+        event_callback: Optional[Callable[[str, str], None]] = None,
     ) -> bool:
         instruction = (
             "执行低风险界面整理。"
@@ -427,4 +473,6 @@ class VisualNavigator:
             max_steps=max_steps,
             settle_seconds=0.5,
             long_running=False,
+            correction_source=correction_source,
+            event_callback=event_callback,
         )

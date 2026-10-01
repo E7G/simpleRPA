@@ -1,44 +1,116 @@
 import os
 
-from PyQt5.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QSizePolicy
+from PyQt5.QtWidgets import (
+    QWidget, QFrame, QVBoxLayout, QHBoxLayout, QGridLayout, QSizePolicy
+)
 from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtGui import QImage, QPixmap
 
 from qfluentwidgets import (
-    ScrollArea, ExpandLayout,
-    HeaderCardWidget, GroupHeaderCardWidget,
-    SettingCardGroup, SwitchSettingCard, OptionsSettingCard,
+    ScrollArea, TitleLabel, StrongBodyLabel, BodyLabel, CaptionLabel,
     TextEdit, LineEdit, PasswordLineEdit,
-    PushButton, PrimaryPushButton,
-    ImageLabel, TitleLabel, BodyLabel, CaptionLabel,
-    InfoBar, InfoBarPosition, IndeterminateProgressRing,
-    CardWidget, FluentIcon as FIF,
-    ConfigItem, BoolValidator, qconfig, setTheme,
+    PushButton, PrimaryPushButton, ToolButton, SwitchButton,
+    ImageLabel, InfoBar, InfoBarPosition, IndeterminateProgressRing,
+    ToolTipFilter, FluentIcon as FIF,
+    qconfig, toggleTheme, isDarkTheme,
 )
 
 from .widgets import WindowSelector
 
 
-AUTO_CLEANUP_ITEM = ConfigItem(
-    "AI", "AutoCleanup", True, BoolValidator()
-)
-RETURN_HOME_ITEM = ConfigItem(
-    "AI", "ReturnHome", True, BoolValidator()
-)
-BACKGROUND_MODE_ITEM = ConfigItem(
-    "AI", "BackgroundMode", True, BoolValidator()
-)
+class AIToolBar(QWidget):
+    """Toolbar copied from the official QFluentWidgets GalleryInterface pattern."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent=parent)
+
+        self.titleLabel = TitleLabel("AI 视觉助手", self)
+        self.subtitleLabel = CaptionLabel(
+            "选择目标窗口，然后直接用自然语言描述任务。", self
+        )
+        self.themeButton = ToolButton(FIF.CONSTRACT, self)
+
+        self.vBoxLayout = QVBoxLayout(self)
+        self.buttonLayout = QHBoxLayout()
+
+        self.setFixedHeight(118)
+        self.vBoxLayout.setSpacing(0)
+        self.vBoxLayout.setContentsMargins(36, 22, 36, 12)
+        self.vBoxLayout.addWidget(self.titleLabel)
+        self.vBoxLayout.addSpacing(4)
+        self.vBoxLayout.addWidget(self.subtitleLabel)
+        self.vBoxLayout.addSpacing(4)
+        self.vBoxLayout.addLayout(self.buttonLayout, 1)
+        self.vBoxLayout.setAlignment(Qt.AlignTop)
+
+        self.buttonLayout.setSpacing(4)
+        self.buttonLayout.setContentsMargins(0, 0, 0, 0)
+        self.buttonLayout.addStretch(1)
+        self.buttonLayout.addWidget(self.themeButton, 0, Qt.AlignRight)
+        self.buttonLayout.setAlignment(Qt.AlignVCenter | Qt.AlignRight)
+
+        self.themeButton.installEventFilter(ToolTipFilter(self.themeButton))
+        self.themeButton.setToolTip("切换浅色 / 深色主题")
+        self.themeButton.clicked.connect(lambda: toggleTheme(True))
 
 
-class TargetWindowCard(HeaderCardWidget):
-    """Official HeaderCardWidget pattern, matching QFluentWidgets examples."""
+class ExampleCard(QWidget):
+    """Official GalleryInterface ExampleCard layout without the source footer."""
 
+    def __init__(self, title, widget: QWidget, stretch=0, parent=None):
+        super().__init__(parent=parent)
+
+        self.widget = widget
+        self.stretch = stretch
+
+        self.titleLabel = StrongBodyLabel(title, self)
+        self.card = QFrame(self)
+
+        self.vBoxLayout = QVBoxLayout(self)
+        self.cardLayout = QVBoxLayout(self.card)
+        self.topLayout = QHBoxLayout()
+
+        self.card.setObjectName("card")
+
+        self.vBoxLayout.setSizeConstraint(QVBoxLayout.SetMinimumSize)
+        self.cardLayout.setSizeConstraint(QVBoxLayout.SetMinimumSize)
+        self.topLayout.setSizeConstraint(QHBoxLayout.SetMinimumSize)
+
+        self.vBoxLayout.setSpacing(12)
+        self.vBoxLayout.setContentsMargins(0, 0, 0, 0)
+        self.topLayout.setContentsMargins(18, 18, 18, 18)
+        self.cardLayout.setContentsMargins(0, 0, 0, 0)
+
+        self.vBoxLayout.addWidget(self.titleLabel, 0, Qt.AlignTop)
+        self.vBoxLayout.addWidget(self.card, 0, Qt.AlignTop)
+        self.vBoxLayout.setAlignment(Qt.AlignTop)
+
+        self.cardLayout.setSpacing(0)
+        self.cardLayout.setAlignment(Qt.AlignTop)
+        self.cardLayout.addLayout(self.topLayout, 0)
+
+        self.widget.setParent(self.card)
+        self.topLayout.addWidget(self.widget)
+        if self.stretch == 0:
+            self.topLayout.addStretch(1)
+
+        self.widget.show()
+
+
+class TargetPanel(QWidget):
     window_selected = pyqtSignal(object)
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setTitle("目标窗口")
-        self.setBorderRadius(8)
+        self._last_preview = None
+
+        self.vBoxLayout = QVBoxLayout(self)
+        self.vBoxLayout.setContentsMargins(0, 0, 0, 0)
+        self.vBoxLayout.setSpacing(10)
+
+        top = QHBoxLayout()
+        top.setContentsMargins(0, 0, 0, 0)
+        top.setSpacing(8)
 
         self.windowSelector = WindowSelector(compact=True)
         self.windowSelector.refresh_windows()
@@ -47,45 +119,34 @@ class TargetWindowCard(HeaderCardWidget):
         self.refreshButton = PushButton(FIF.SYNC, "刷新预览", self)
         self.refreshButton.clicked.connect(self.refresh_preview)
 
+        top.addWidget(self.windowSelector, 1)
+        top.addWidget(self.refreshButton)
+
         self.previewLabel = ImageLabel(self)
         self.previewLabel.setText("选择目标窗口后显示预览")
         self.previewLabel.setAlignment(Qt.AlignCenter)
-        self.previewLabel.setMinimumHeight(260)
+        self.previewLabel.setMinimumHeight(220)
+        self.previewLabel.setMaximumHeight(300)
         self.previewLabel.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
 
         self.stateLabel = CaptionLabel("尚未选择窗口", self)
         self.stateLabel.setWordWrap(True)
 
-        self.topLayout = QHBoxLayout()
-        self.topLayout.setContentsMargins(0, 0, 0, 0)
-        self.topLayout.setSpacing(10)
-        self.topLayout.addWidget(self.windowSelector, 1)
-        self.topLayout.addWidget(self.refreshButton, 0, Qt.AlignRight)
-
-        self.contentLayout = QVBoxLayout()
-        self.contentLayout.setContentsMargins(0, 0, 0, 0)
-        self.contentLayout.setSpacing(10)
-        self.contentLayout.addLayout(self.topLayout)
-        self.contentLayout.addWidget(self.previewLabel)
-        self.contentLayout.addWidget(self.stateLabel)
-
-        # HeaderCardWidget.viewLayout is a QHBoxLayout in QFluentWidgets.
-        # The official examples add one vertical layout into it.
-        self.viewLayout.addLayout(self.contentLayout)
-
-        self._last_preview = None
-
-    def _on_window_selected(self, hwnd):
-        title = self.windowSelector.get_selected_title()
-        self.stateLabel.setText(f"已选择：{title or hwnd}")
-        self.window_selected.emit(hwnd)
-        self.refresh_preview()
+        self.vBoxLayout.addLayout(top)
+        self.vBoxLayout.addWidget(self.previewLabel)
+        self.vBoxLayout.addWidget(self.stateLabel)
 
     def get_selected_hwnd(self):
         return self.windowSelector.get_selected_hwnd()
 
     def get_selected_title(self):
         return self.windowSelector.get_selected_title()
+
+    def _on_window_selected(self, hwnd):
+        title = self.get_selected_title()
+        self.stateLabel.setText(f"已选择：{title or hwnd}")
+        self.window_selected.emit(hwnd)
+        self.refresh_preview()
 
     def refresh_preview(self):
         hwnd = self.get_selected_hwnd()
@@ -157,20 +218,20 @@ class TargetWindowCard(HeaderCardWidget):
         )
 
 
-class TaskCard(HeaderCardWidget):
-    """Task editor using the official HeaderCardWidget.viewLayout API."""
-
+class TaskPanel(QWidget):
     submit_requested = pyqtSignal(str, bool)
     stop_requested = pyqtSignal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setTitle("对话任务")
-        self.setBorderRadius(8)
+
+        self.vBoxLayout = QVBoxLayout(self)
+        self.vBoxLayout.setContentsMargins(0, 0, 0, 0)
+        self.vBoxLayout.setSpacing(10)
 
         self.historyEdit = TextEdit(self)
         self.historyEdit.setReadOnly(True)
-        self.historyEdit.setMinimumHeight(260)
+        self.historyEdit.setMinimumHeight(240)
         self.historyEdit.setPlaceholderText("任务、识别状态和执行结果会显示在这里")
 
         self.quickLayout = QGridLayout()
@@ -207,38 +268,31 @@ class TaskCard(HeaderCardWidget):
         self.stopButton.setEnabled(False)
         self.stopButton.clicked.connect(self.stop_requested.emit)
 
-        self.buttonLayout = QHBoxLayout()
-        self.buttonLayout.setContentsMargins(0, 0, 0, 0)
-        self.buttonLayout.setSpacing(8)
-        self.buttonLayout.addWidget(self.addButton)
-        self.buttonLayout.addWidget(self.runButton, 1)
-        self.buttonLayout.addWidget(self.stopButton)
+        buttons = QHBoxLayout()
+        buttons.setContentsMargins(0, 0, 0, 0)
+        buttons.setSpacing(8)
+        buttons.addWidget(self.addButton)
+        buttons.addWidget(self.runButton, 1)
+        buttons.addWidget(self.stopButton)
 
         self.progressRing = IndeterminateProgressRing(self)
         self.progressRing.setFixedSize(22, 22)
         self.progressRing.hide()
 
         self.statusLabel = BodyLabel("就绪", self)
-        self.statusLayout = QHBoxLayout()
-        self.statusLayout.setContentsMargins(0, 0, 0, 0)
-        self.statusLayout.setSpacing(8)
-        self.statusLayout.addWidget(self.progressRing)
-        self.statusLayout.addWidget(self.statusLabel)
-        self.statusLayout.addStretch(1)
+        status = QHBoxLayout()
+        status.setContentsMargins(0, 0, 0, 0)
+        status.setSpacing(8)
+        status.addWidget(self.progressRing)
+        status.addWidget(self.statusLabel)
+        status.addStretch(1)
 
-        self.contentLayout = QVBoxLayout()
-        self.contentLayout.setContentsMargins(0, 0, 0, 0)
-        self.contentLayout.setSpacing(10)
-        self.contentLayout.addWidget(self.historyEdit)
-        self.contentLayout.addWidget(CaptionLabel("快捷任务", self))
-        self.contentLayout.addLayout(self.quickLayout)
-        self.contentLayout.addWidget(self.inputEdit)
-        self.contentLayout.addLayout(self.buttonLayout)
-        self.contentLayout.addLayout(self.statusLayout)
-
-        # Same composition pattern as the official SystemRequirementCard demo:
-        # one internal vertical layout is attached to HeaderCardWidget.viewLayout.
-        self.viewLayout.addLayout(self.contentLayout)
+        self.vBoxLayout.addWidget(self.historyEdit)
+        self.vBoxLayout.addWidget(CaptionLabel("快捷任务", self))
+        self.vBoxLayout.addLayout(self.quickLayout)
+        self.vBoxLayout.addWidget(self.inputEdit)
+        self.vBoxLayout.addLayout(buttons)
+        self.vBoxLayout.addLayout(status)
 
         self.append_assistant(
             "可以直接说：\n"
@@ -280,58 +334,84 @@ class TaskCard(HeaderCardWidget):
             self.progressRing.hide()
 
 
-class AgnesConnectionCard(GroupHeaderCardWidget):
-    """Official GroupHeaderCardWidget.addGroup() pattern from the gallery demo."""
-
+class SettingsPanel(QWidget):
     config_applied = pyqtSignal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setTitle("Agnes 连接")
-        self.setBorderRadius(8)
+
+        self.autoCleanup = True
+        self.returnHome = True
+        self.backgroundMode = True
+
+        self.vBoxLayout = QVBoxLayout(self)
+        self.vBoxLayout.setContentsMargins(0, 0, 0, 0)
+        self.vBoxLayout.setSpacing(12)
 
         self.apiKeyEdit = PasswordLineEdit(self)
-        self.apiKeyEdit.setPlaceholderText("粘贴 API Key")
-        self.apiKeyEdit.setFixedWidth(360)
+        self.apiKeyEdit.setPlaceholderText("Agnes API Key")
 
         self.modelEdit = LineEdit(self)
         self.modelEdit.setText(os.getenv("AGNES_MODEL") or "agnes-3.0-flash")
-        self.modelEdit.setFixedWidth(360)
 
         self.baseEdit = LineEdit(self)
         self.baseEdit.setText(
             os.getenv("AGNES_API_BASE") or "https://apihub.agnes-ai.com/v1"
         )
-        self.baseEdit.setFixedWidth(360)
 
-        self.applyButton = PrimaryPushButton("应用", self)
-        self.applyButton.setFixedWidth(120)
+        self.applyButton = PrimaryPushButton(FIF.SETTING, "应用 Agnes 配置", self)
         self.applyButton.clicked.connect(self.apply_config)
 
-        self.addGroup(
-            FIF.SETTING,
-            "API Key",
-            "仅保存到当前程序会话，不写入脚本或仓库",
-            self.apiKeyEdit,
+        self.vBoxLayout.addWidget(CaptionLabel("Agnes API Key（仅当前会话）", self))
+        self.vBoxLayout.addWidget(self.apiKeyEdit)
+        self.vBoxLayout.addWidget(CaptionLabel("模型", self))
+        self.vBoxLayout.addWidget(self.modelEdit)
+        self.vBoxLayout.addWidget(CaptionLabel("API Base", self))
+        self.vBoxLayout.addWidget(self.baseEdit)
+        self.vBoxLayout.addWidget(self.applyButton)
+
+        self.vBoxLayout.addSpacing(6)
+        self.vBoxLayout.addWidget(StrongBodyLabel("执行选项", self))
+
+        self.autoCleanupSwitch = self._add_switch(
+            "自动清理页面",
+            "任务开始前关闭公告、活动说明和普通提示",
+            True,
         )
-        self.addGroup(
-            FIF.APPLICATION,
-            "模型",
-            "Agnes 视觉模型名称",
-            self.modelEdit,
+        self.returnHomeSwitch = self._add_switch(
+            "完成后返回首页",
+            "任务完成后由视觉导航逐级返回首页或大厅",
+            True,
         )
-        self.addGroup(
-            FIF.SYNC,
-            "API Base",
-            "OpenAI 兼容 API 地址",
-            self.baseEdit,
+        self.backgroundSwitch = self._add_switch(
+            "后台视觉操作",
+            "优先使用后台截图和后台点击，不抢占鼠标",
+            True,
         )
-        self.addGroup(
-            FIF.SETTING,
-            "应用配置",
-            "使上面的连接设置立即生效",
-            self.applyButton,
-        )
+
+    def _add_switch(self, title, description, checked):
+        rowWidget = QWidget(self)
+        row = QHBoxLayout(rowWidget)
+        row.setContentsMargins(0, 6, 0, 6)
+        row.setSpacing(12)
+
+        labels = QVBoxLayout()
+        labels.setContentsMargins(0, 0, 0, 0)
+        labels.setSpacing(1)
+        labels.addWidget(BodyLabel(title, rowWidget))
+
+        desc = CaptionLabel(description, rowWidget)
+        desc.setWordWrap(True)
+        labels.addWidget(desc)
+
+        switch = SwitchButton(rowWidget)
+        switch.setChecked(checked)
+
+        row.addLayout(labels, 1)
+        row.addWidget(switch, 0, Qt.AlignVCenter)
+        self.vBoxLayout.addWidget(rowWidget)
+
+        return switch
 
     def apply_config(self):
         key = self.apiKeyEdit.text().strip()
@@ -347,9 +427,16 @@ class AgnesConnectionCard(GroupHeaderCardWidget):
 
         self.config_applied.emit()
 
+    def get_options(self):
+        return {
+            "prepare_navigation": 1 if self.autoCleanupSwitch.isChecked() else 0,
+            "return_home": 1 if self.returnHomeSwitch.isChecked() else 0,
+            "background_mode": self.backgroundSwitch.isChecked(),
+        }
+
 
 class AIAssistantPage(ScrollArea):
-    """AI page following QFluentWidgets official ScrollArea examples."""
+    """AI page based on the official QFluentWidgets GalleryInterface example."""
 
     task_requested = pyqtSignal(str, bool)
     stop_requested = pyqtSignal()
@@ -359,114 +446,75 @@ class AIAssistantPage(ScrollArea):
         super().__init__(parent=parent)
 
         self.view = QWidget(self)
+        self.toolBar = AIToolBar(self)
         self.vBoxLayout = QVBoxLayout(self.view)
 
-        self.titleLabel = TitleLabel("AI 视觉助手", self)
-        self.subtitleLabel = CaptionLabel(
-            "选择目标窗口，然后直接描述任务。", self
+        self.targetPanel = TargetPanel(self.view)
+        self.taskPanel = TaskPanel(self.view)
+        self.settingsPanel = SettingsPanel(self.view)
+
+        self.targetCard = ExampleCard(
+            "目标窗口",
+            self.targetPanel,
+            stretch=1,
+            parent=self.view,
+        )
+        self.taskCard = ExampleCard(
+            "对话任务",
+            self.taskPanel,
+            stretch=1,
+            parent=self.view,
+        )
+        self.settingsCard = ExampleCard(
+            "AI 与执行设置",
+            self.settingsPanel,
+            stretch=1,
+            parent=self.view,
         )
 
-        self.targetCard = TargetWindowCard(self.view)
-        self.taskCard = TaskCard(self.view)
-        self.connectionCard = AgnesConnectionCard(self.view)
-
-        self.behaviorGroup = SettingCardGroup("界面与执行", self.view)
-        self.themeCard = OptionsSettingCard(
-            qconfig.themeMode,
-            FIF.BRUSH,
-            "应用主题",
-            "切换浅色、深色或跟随系统",
-            texts=["浅色", "深色", "跟随系统"],
-            parent=self.behaviorGroup,
-        )
-        self.autoCleanupCard = SwitchSettingCard(
-            FIF.APPLICATION,
-            "自动清理页面",
-            "任务开始前关闭公告、活动说明和普通提示",
-            configItem=AUTO_CLEANUP_ITEM,
-            parent=self.behaviorGroup,
-        )
-        self.returnHomeCard = SwitchSettingCard(
-            FIF.HOME,
-            "完成后返回首页",
-            "任务完成后由视觉导航逐级返回首页或大厅",
-            configItem=RETURN_HOME_ITEM,
-            parent=self.behaviorGroup,
-        )
-        self.backgroundCard = SwitchSettingCard(
-            FIF.SETTING,
-            "后台视觉操作",
-            "优先使用后台截图和后台点击，不抢占鼠标",
-            configItem=BACKGROUND_MODE_ITEM,
-            parent=self.behaviorGroup,
-        )
-
-        self._init_widget()
-        self._init_layout()
-        self._connect_signals()
-
-    def _init_widget(self):
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.setViewportMargins(0, self.toolBar.height(), 0, 0)
         self.setWidget(self.view)
         self.setWidgetResizable(True)
-        self.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        self.setViewportMargins(0, 86, 0, 20)
         self.setObjectName("aiInterface")
-        self.view.setObjectName("aiScrollWidget")
 
-        # This is the same approach used by the official AppInterface demo.
-        self.enableTransparentBackground()
-
-        self.titleLabel.move(36, 24)
-        self.subtitleLabel.move(36, 56)
-
-    def _init_layout(self):
-        self.behaviorGroup.addSettingCard(self.themeCard)
-        self.behaviorGroup.addSettingCard(self.autoCleanupCard)
-        self.behaviorGroup.addSettingCard(self.returnHomeCard)
-        self.behaviorGroup.addSettingCard(self.backgroundCard)
-
-        self.vBoxLayout.setSpacing(18)
-        self.vBoxLayout.setContentsMargins(36, 8, 36, 36)
+        self.vBoxLayout.setSpacing(30)
+        self.vBoxLayout.setAlignment(Qt.AlignTop)
+        self.vBoxLayout.setContentsMargins(36, 20, 36, 36)
         self.vBoxLayout.addWidget(self.targetCard, 0, Qt.AlignTop)
         self.vBoxLayout.addWidget(self.taskCard, 0, Qt.AlignTop)
-        self.vBoxLayout.addWidget(self.connectionCard, 0, Qt.AlignTop)
-        self.vBoxLayout.addWidget(self.behaviorGroup, 0, Qt.AlignTop)
-        self.vBoxLayout.addStretch(1)
+        self.vBoxLayout.addWidget(self.settingsCard, 0, Qt.AlignTop)
 
-    def _connect_signals(self):
-        self.targetCard.window_selected.connect(self.window_selected.emit)
-        self.taskCard.submit_requested.connect(self._on_submit)
-        self.taskCard.stop_requested.connect(self.stop_requested.emit)
-        self.connectionCard.config_applied.connect(self._on_config_applied)
+        self.view.setObjectName("view")
 
-        # OptionsSettingCard updates qconfig.themeMode itself. Because this page
-        # uses the global qconfig item directly, refresh the Fluent stylesheet after
-        # the option changes (the official demo does this via its own cfg.themeChanged).
-        self.themeCard.optionChanged.connect(self._on_theme_option_changed)
-        qconfig.themeChangedFinished.connect(self._refresh_fluent_surfaces)
+        self.targetPanel.window_selected.connect(self.window_selected.emit)
+        self.taskPanel.submit_requested.connect(self._on_submit)
+        self.taskPanel.stop_requested.connect(self.stop_requested.emit)
+        self.settingsPanel.config_applied.connect(self._on_config_applied)
 
-    def _on_theme_option_changed(self, _):
-        setTheme(qconfig.get(qconfig.themeMode))
+        qconfig.themeChangedFinished.connect(self._apply_qss)
+        self._apply_qss()
 
-    def _refresh_fluent_surfaces(self):
-        # CardWidget keeps an animated backgroundColor property. Refresh it
-        # after the library has swapped light/dark stylesheets.
-        for card in self.findChildren(CardWidget):
-            try:
-                card._updateBackgroundColor()
-            except Exception:
-                pass
+    def _qss_path(self):
+        theme = "dark" if isDarkTheme() else "light"
+        return os.path.join(
+            os.path.dirname(__file__),
+            "resources",
+            "qss",
+            theme,
+            "ai_assistant_page.qss",
+        )
 
-        window = self.window()
-        if window and hasattr(window, "_updateStackedBackground"):
-            try:
-                window._updateStackedBackground()
-            except Exception:
-                pass
+    def _apply_qss(self):
+        try:
+            with open(self._qss_path(), "r", encoding="utf-8") as f:
+                self.setStyleSheet(f.read())
+        except Exception as exc:
+            print(f"[AI助手样式加载失败] {exc}")
 
-        self.update()
-        self.viewport().update()
-        self.view.update()
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self.toolBar.resize(self.width(), self.toolBar.height())
 
     def _on_submit(self, text, run_now):
         if not self.get_selected_hwnd():
@@ -477,7 +525,7 @@ class AIAssistantPage(ScrollArea):
 
     def _on_config_applied(self):
         if os.getenv("AGNES_API_KEY") or os.getenv("AGNESAI_API_KEY"):
-            self.taskCard.append_assistant("Agnes 配置已应用到当前程序会话。")
+            self.taskPanel.append_assistant("Agnes 配置已应用到当前程序会话。")
             InfoBar.success(
                 title="Agnes 已配置",
                 content="连接设置已生效。",
@@ -491,29 +539,25 @@ class AIAssistantPage(ScrollArea):
             self.set_status("尚未填写 Agnes API Key", error=True)
 
     def get_selected_hwnd(self):
-        return self.targetCard.get_selected_hwnd()
+        return self.targetPanel.get_selected_hwnd()
 
     def get_selected_title(self):
-        return self.targetCard.get_selected_title()
+        return self.targetPanel.get_selected_title()
 
     def get_task_options(self):
-        return {
-            "prepare_navigation": 1 if qconfig.get(AUTO_CLEANUP_ITEM) else 0,
-            "return_home": 1 if qconfig.get(RETURN_HOME_ITEM) else 0,
-            "background_mode": bool(qconfig.get(BACKGROUND_MODE_ITEM)),
-        }
+        return self.settingsPanel.get_options()
 
     def refresh_preview(self):
-        self.targetCard.refresh_preview()
+        self.targetPanel.refresh_preview()
 
     def append_user(self, text):
-        self.taskCard.append_user(text)
+        self.taskPanel.append_user(text)
 
     def append_assistant(self, text):
-        self.taskCard.append_assistant(text)
+        self.taskPanel.append_assistant(text)
 
     def set_status(self, text, running=False, error=False):
-        self.taskCard.set_status(text, running=running)
+        self.taskPanel.set_status(text, running=running)
 
         if error:
             InfoBar.warning(

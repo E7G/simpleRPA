@@ -102,7 +102,7 @@ class PropertyPanel(QWidget):
     def _collect_script_variables(self) -> Set[str]:
         variables = set()
         for action in self._all_actions:
-            if action.action_type == ActionType.IMAGE_CHECK:
+            if action.action_type in [ActionType.IMAGE_CHECK, ActionType.AI_VISUAL_CHECK]:
                 marker = action.condition_marker
                 if marker:
                     variables.add(marker[1:])
@@ -205,7 +205,16 @@ class PropertyPanel(QWidget):
         params_label = StrongBodyLabel("参数设置")
         self._content_layout.addWidget(params_label)
         
-        if self._current_action.action_type in [ActionType.MOUSE_CLICK_RELATIVE, ActionType.MOUSE_MOVE_RELATIVE, ActionType.IMAGE_CLICK, ActionType.IMAGE_WAIT_CLICK]:
+        if self._current_action.action_type in [
+            ActionType.MOUSE_CLICK_RELATIVE,
+            ActionType.MOUSE_MOVE_RELATIVE,
+            ActionType.IMAGE_CLICK,
+            ActionType.IMAGE_WAIT_CLICK,
+            ActionType.AI_VISUAL_CLICK,
+            ActionType.AI_VISUAL_CHECK,
+            ActionType.AI_VISUAL_NAVIGATE,
+            ActionType.AI_VISUAL_TASK,
+        ]:
             self._add_window_mode_section()
         
         processed_params = set()

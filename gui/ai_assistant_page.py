@@ -217,9 +217,7 @@ class TargetPanel(QWidget):
 
             image = clicker.capture(background=True)
             if image is None:
-                image = clicker.capture(background=False)
-            if image is None:
-                raise RuntimeError("窗口截图失败")
+                raise RuntimeError("后台窗口截图失败（不会降级为前台截图）")
 
             rgb = image.convert("RGB")
             width, height = rgb.size

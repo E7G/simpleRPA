@@ -98,8 +98,8 @@ class PreviewPane(QWidget):
         super().__init__(parent)
         self._source = QImage()
 
-        self.setMinimumHeight(420)
-        self.setMaximumHeight(560)
+        self.setMinimumSize(350, 600)
+        self.setMaximumHeight(760)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
 
         self.vBoxLayout = QVBoxLayout(self)
@@ -492,6 +492,9 @@ class AIAssistantPage(ScrollArea):
             stretch=1,
             parent=self.view,
         )
+        self.targetCard.setMinimumWidth(410)
+        self.targetCard.setMaximumWidth(460)
+
         self.taskCard = ExampleCard(
             "对话任务",
             self.taskPanel,
@@ -505,18 +508,36 @@ class AIAssistantPage(ScrollArea):
             parent=self.view,
         )
 
+        # Gallery-style page, but arranged as a workspace:
+        # tall portrait preview on the left, task/settings stack on the right.
+        self.bodyWidget = QWidget(self.view)
+        self.bodyLayout = QHBoxLayout(self.bodyWidget)
+        self.bodyLayout.setContentsMargins(0, 0, 0, 0)
+        self.bodyLayout.setSpacing(20)
+        self.bodyLayout.setAlignment(Qt.AlignTop)
+
+        self.rightWidget = QWidget(self.bodyWidget)
+        self.rightLayout = QVBoxLayout(self.rightWidget)
+        self.rightLayout.setContentsMargins(0, 0, 0, 0)
+        self.rightLayout.setSpacing(24)
+        self.rightLayout.setAlignment(Qt.AlignTop)
+        self.rightLayout.addWidget(self.taskCard, 0, Qt.AlignTop)
+        self.rightLayout.addWidget(self.settingsCard, 0, Qt.AlignTop)
+        self.rightLayout.addStretch(1)
+
+        self.bodyLayout.addWidget(self.targetCard, 0, Qt.AlignTop)
+        self.bodyLayout.addWidget(self.rightWidget, 1)
+
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.setViewportMargins(0, self.toolBar.height(), 0, 0)
         self.setWidget(self.view)
         self.setWidgetResizable(True)
         self.setObjectName("aiInterface")
 
-        self.vBoxLayout.setSpacing(30)
+        self.vBoxLayout.setSpacing(0)
         self.vBoxLayout.setAlignment(Qt.AlignTop)
         self.vBoxLayout.setContentsMargins(36, 20, 36, 36)
-        self.vBoxLayout.addWidget(self.targetCard, 0, Qt.AlignTop)
-        self.vBoxLayout.addWidget(self.taskCard, 0, Qt.AlignTop)
-        self.vBoxLayout.addWidget(self.settingsCard, 0, Qt.AlignTop)
+        self.vBoxLayout.addWidget(self.bodyWidget, 0, Qt.AlignTop)
 
         self.view.setObjectName("view")
 

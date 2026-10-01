@@ -1032,7 +1032,9 @@ class MainWindow(MSFluentWindow):
             action_type=ActionType.AI_VISUAL_TASK,
             params=params,
             window_title=window_title,
-            background_mode=bool(options['background_mode']),
+            # AI Assistant tasks are background-only by design. Do not expose a
+            # foreground mode here: the preview is the user's live view.
+            background_mode=True,
         )
         self._script_editor.add_action(action)
         self._set_current_tab_modified(True)

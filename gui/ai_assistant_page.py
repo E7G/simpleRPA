@@ -360,8 +360,15 @@ class TaskPanel(QWidget):
 
         self.historyEdit = TextEdit(self)
         self.historyEdit.setReadOnly(True)
-        self.historyEdit.setMinimumHeight(240)
+        self.historyEdit.setMinimumHeight(220)
         self.historyEdit.setPlaceholderText("任务、识别状态和执行结果会显示在这里")
+
+        self.detailsEdit = TextEdit(self)
+        self.detailsEdit.setReadOnly(True)
+        self.detailsEdit.setMinimumHeight(220)
+        self.detailsEdit.setPlaceholderText(
+            "执行详情会实时显示：观察、判断、点击、等待、重试、恢复和完成复核"
+        )
 
         self.quickLayout = QGridLayout()
         self.quickLayout.setContentsMargins(0, 0, 0, 0)
@@ -417,6 +424,8 @@ class TaskPanel(QWidget):
         status.addStretch(1)
 
         self.vBoxLayout.addWidget(self.historyEdit)
+        self.vBoxLayout.addWidget(StrongBodyLabel("执行详情", self))
+        self.vBoxLayout.addWidget(self.detailsEdit)
         self.vBoxLayout.addWidget(CaptionLabel("快捷任务", self))
         self.vBoxLayout.addLayout(self.quickLayout)
         self.vBoxLayout.addWidget(self.inputEdit)
@@ -449,16 +458,30 @@ class TaskPanel(QWidget):
     def append_assistant(self, text):
         self.historyEdit.append(f"simpleRPA：{text}\n")
 
+    def append_trace(self, text):
+        self.detailsEdit.append(text)
+
+    def clear_trace(self):
+        self.detailsEdit.clear()
+
     def set_status(self, text, running=False):
         self.statusLabel.setText(text)
         self.addButton.setEnabled(not running)
-        self.runButton.setEnabled(not running)
+        self.runButton.setEnabled(True)
         self.stopButton.setEnabled(running)
 
         if running:
+            self.runButton.setText("发送指正")
+            self.inputEdit.setPlaceholderText(
+                "任务运行中：可直接输入指正，例如“D4 还亮着，先点 D4”或“不要返回首页”"
+            )
             self.progressRing.show()
             self.progressRing.start()
         else:
+            self.runButton.setText("立即执行")
+            self.inputEdit.setPlaceholderText(
+                "输入任务，例如：把今天能免费领取的奖励都领了……"
+            )
             self.progressRing.stop()
             self.progressRing.hide()
 
@@ -789,6 +812,12 @@ class AIAssistantPage(ScrollArea):
 
     def append_assistant(self, text):
         self.taskPanel.append_assistant(text)
+
+    def append_trace(self, text):
+        self.taskPanel.append_trace(text)
+
+    def clear_trace(self):
+        self.taskPanel.clear_trace()
 
     def set_status(self, text, running=False, error=False):
         self.taskPanel.set_status(text, running=running)

@@ -220,7 +220,7 @@ class VisionCoreTests(unittest.TestCase):
     def test_ai_task_defaults_to_long_running_session(self):
         params = ActionManager.get_default_params(ActionType.AI_VISUAL_TASK)
         self.assertEqual(params["long_running"], 1)
-        self.assertEqual(params["max_runtime_minutes"], 120)
+        self.assertEqual(params["max_runtime_minutes"], 360)
         self.assertGreaterEqual(params["retry_limit"], 10)
 
     def test_visual_navigator_bounded_click_loop(self):

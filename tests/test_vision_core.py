@@ -90,6 +90,7 @@ class LongTaskProvider:
 
     def __init__(self, clicks_before_done=6, transient_failures=0):
         self.calls = 0
+        self.successful_calls = 0
         self.clicks_before_done = clicks_before_done
         self.transient_failures = transient_failures
         self.contexts = []
@@ -102,13 +103,14 @@ class LongTaskProvider:
             self.transient_failures -= 1
             raise RuntimeError("temporary provider timeout")
 
-        if self.calls <= self.clicks_before_done:
+        self.successful_calls += 1
+        if self.successful_calls <= self.clicks_before_done:
             return {
                 "status": "continue",
                 "action": "click",
                 "x": 500,
                 "y": 500,
-                "target": f"步骤{self.calls}",
+                "target": f"步骤{self.successful_calls}",
                 "confidence": 0.9,
             }
 

@@ -256,6 +256,29 @@ def _local_example_context(instruction: str, max_scripts: int = 4):
     )
 
 
+def get_reference_labels(instruction: str, max_scripts: int = 4):
+    labels = []
+
+    for path in _matching_script_paths(instruction, max_scripts=max_scripts):
+        label = path.name
+        if label.endswith(".rpa.json"):
+            label = label[:-9]
+        elif label.endswith(".json"):
+            label = label[:-5]
+        if label not in labels:
+            labels.append(label)
+
+    text = (instruction or "").lower()
+    if not labels:
+        for item in EXAMPLES:
+            if any(keyword.lower() in text for keyword in item["keywords"]):
+                labels.append(item["title"])
+                if len(labels) >= max_scripts:
+                    break
+
+    return labels
+
+
 def select_example_context(instruction: str, max_examples: int = 4) -> str:
     text = (instruction or "").lower()
     scored: List[tuple] = []

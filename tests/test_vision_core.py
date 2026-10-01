@@ -1,4 +1,7 @@
+import os
+import time
 import unittest
+from unittest.mock import patch
 
 from core.actions import ActionManager, ActionType
 from core.vision.agnes import AgnesVisionProvider
@@ -243,6 +246,29 @@ class VisionCoreTests(unittest.TestCase):
         self.assertEqual(params["long_running"], 1)
         self.assertEqual(params["max_runtime_minutes"], 360)
         self.assertGreaterEqual(params["retry_limit"], 10)
+        self.assertEqual(params["return_home"], 0)
+
+    def test_agnes_free_tier_has_conservative_global_throttle(self):
+        AgnesVisionProvider._reset_rate_limiter_for_tests()
+        with patch.dict(
+            os.environ,
+            {
+                "AGNES_MIN_REQUEST_INTERVAL": "5",
+                "AGNES_429_BASE_COOLDOWN": "30",
+                "AGNES_429_MAX_COOLDOWN": "300",
+            },
+            clear=False,
+        ):
+            provider = AgnesVisionProvider(api_key="test")
+            self.assertGreaterEqual(provider.min_request_interval, 5.0)
+            before = time.monotonic()
+            cooldown = provider._note_rate_limit(7)
+            self.assertGreaterEqual(cooldown, 30.0)
+            self.assertGreater(
+                AgnesVisionProvider._rate_limit_until,
+                before + 25.0,
+            )
+        AgnesVisionProvider._reset_rate_limiter_for_tests()
 
     def test_live_correction_is_injected_into_next_agent_context(self):
         provider = CorrectionAwareProvider()

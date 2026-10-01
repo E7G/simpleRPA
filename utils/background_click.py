@@ -40,6 +40,7 @@ class BackgroundClicker:
         self._title: str = ""
         self._win32_available = self._check_win32()
         self._dm_binding = None
+        self._capture_resources = None
         
         if hwnd:
             self.attach_by_hwnd(hwnd)
@@ -80,6 +81,7 @@ class BackgroundClicker:
     
     def attach(self, title_keyword: str) -> bool:
         """通过窗口标题关键字附加到窗口"""
+        self._release_capture_resources()
         if not self._win32_available:
             return False
         
@@ -104,6 +106,7 @@ class BackgroundClicker:
     
     def attach_by_hwnd(self, hwnd: int) -> bool:
         """通过窗口句柄附加"""
+        self._release_capture_resources()
         if not self._win32_available:
             return False
         
@@ -409,6 +412,174 @@ class BackgroundClicker:
             return BackgroundClickResult(True, "后台滚动成功", True)
         except Exception as e:
             return BackgroundClickResult(False, f"后台滚动失败: {e}", True)
+
+    def _release_capture_resources(self):
+        resources = self._capture_resources
+        self._capture_resources = None
+        if not resources:
+            return
+
+        try:
+            import win32gui
+
+            bitmap = resources.get("bitmap")
+            save_dc = resources.get("save_dc")
+            mfc_dc = resources.get("mfc_dc")
+            hwnd_dc = resources.get("hwnd_dc")
+            hwnd = resources.get("hwnd")
+
+            if bitmap is not None:
+                try:
+                    win32gui.DeleteObject(bitmap.GetHandle())
+                except Exception:
+                    pass
+            if save_dc is not None:
+                try:
+                    save_dc.DeleteDC()
+                except Exception:
+                    pass
+            if mfc_dc is not None:
+                try:
+                    mfc_dc.DeleteDC()
+                except Exception:
+                    pass
+            if hwnd_dc and hwnd:
+                try:
+                    win32gui.ReleaseDC(hwnd, hwnd_dc)
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+    def close(self):
+        self._release_capture_resources()
+
+    def __del__(self):
+        try:
+            self._release_capture_resources()
+        except Exception:
+            pass
+
+    def _ensure_capture_resources(self, hwnd: int, width: int, height: int):
+        current = self._capture_resources
+        if (
+            current
+            and current.get("hwnd") == hwnd
+            and current.get("width") == width
+            and current.get("height") == height
+        ):
+            return current
+
+        self._release_capture_resources()
+
+        import win32gui
+        import win32ui
+
+        hwnd_dc = win32gui.GetWindowDC(hwnd)
+        if not hwnd_dc:
+            return None
+
+        mfc_dc = None
+        save_dc = None
+        bitmap = None
+        try:
+            mfc_dc = win32ui.CreateDCFromHandle(hwnd_dc)
+            save_dc = mfc_dc.CreateCompatibleDC()
+            bitmap = win32ui.CreateBitmap()
+            bitmap.CreateCompatibleBitmap(mfc_dc, width, height)
+            save_dc.SelectObject(bitmap)
+
+            self._capture_resources = {
+                "hwnd": hwnd,
+                "width": width,
+                "height": height,
+                "hwnd_dc": hwnd_dc,
+                "mfc_dc": mfc_dc,
+                "save_dc": save_dc,
+                "bitmap": bitmap,
+            }
+            return self._capture_resources
+        except Exception:
+            try:
+                if bitmap is not None:
+                    win32gui.DeleteObject(bitmap.GetHandle())
+            except Exception:
+                pass
+            try:
+                if save_dc is not None:
+                    save_dc.DeleteDC()
+            except Exception:
+                pass
+            try:
+                if mfc_dc is not None:
+                    mfc_dc.DeleteDC()
+            except Exception:
+                pass
+            try:
+                win32gui.ReleaseDC(hwnd, hwnd_dc)
+            except Exception:
+                pass
+            return None
+
+    def capture_realtime(self):
+        """High-frequency background capture with reusable GDI resources."""
+        if not self._main_hwnd:
+            return None
+
+        target_hwnd = self._render_hwnd or self._main_hwnd
+
+        try:
+            import win32gui
+            from PIL import Image
+
+            left, top, right, bottom = win32gui.GetClientRect(target_hwnd)
+            width = right - left
+            height = bottom - top
+            if width <= 0 or height <= 0:
+                return None
+
+            if self._dm_binding and self._dm_binding.dm:
+                image = self._dm_binding.capture(width, height)
+                if image is not None:
+                    return image
+
+            resources = self._ensure_capture_resources(target_hwnd, width, height)
+            if not resources:
+                return None
+
+            save_dc = resources["save_dc"]
+            bitmap = resources["bitmap"]
+
+            result = 0
+            for flags in (PW_RENDERFULLCONTENT, PW_CLIENTONLY, 0):
+                result = user32.PrintWindow(
+                    target_hwnd,
+                    save_dc.GetSafeHdc(),
+                    flags,
+                )
+                if result == 1:
+                    break
+
+            if result != 1:
+                # Rebuild resources once on the next frame in case the window
+                # recreated its rendering surface.
+                self._release_capture_resources()
+                return None
+
+            bmp_info = bitmap.GetInfo()
+            bmp_bytes = bitmap.GetBitmapBits(True)
+            return Image.frombuffer(
+                'RGB',
+                (bmp_info['bmWidth'], bmp_info['bmHeight']),
+                bmp_bytes,
+                'raw',
+                'BGRX',
+                0,
+                1,
+            )
+        except Exception:
+            self._release_capture_resources()
+            return None
 
     def capture(self, background: bool = True):
         """截取目标窗口客户区图像。"""

@@ -57,6 +57,32 @@ class RewardVerifyProvider:
         return {"status": "done", "action": "none", "reason": "整页无可领取奖励"}
 
 
+class FocusedD4Provider:
+    @staticmethod
+    def normalized_to_pixel(result, image_size):
+        return AgnesVisionProvider.normalized_to_pixel(result, image_size)
+
+    def __init__(self):
+        self.next_calls = 0
+        self.check_calls = 0
+
+    def next_action(self, image, instruction, context=""):
+        self.next_calls += 1
+        return {"status": "done", "action": "none", "reason": "误判完成"}
+
+    def check(self, image, query, context=""):
+        self.check_calls += 1
+        if self.check_calls == 1:
+            return {
+                "found": True,
+                "x": 780,
+                "y": 430,
+                "confidence": 0.95,
+                "target": "D4",
+            }
+        return {"found": False, "confidence": 0.95}
+
+
 class VisionCoreTests(unittest.TestCase):
     def test_ai_actions_registered(self):
         expected = {
@@ -95,6 +121,24 @@ class VisionCoreTests(unittest.TestCase):
         self.assertGreaterEqual(provider.calls, 4)
         self.assertIn("D4", provider.contexts[1])
         self.assertIn("逐个扫描", provider.contexts[1])
+
+    def test_signin_done_runs_focused_d4_check_before_finishing(self):
+        provider = FocusedD4Provider()
+        navigator = VisualNavigator(provider)
+        clicks = []
+
+        result = navigator.run(
+            instruction="进入签到页面，把所有免费的可领取奖励领完",
+            capture=lambda: FakeImage(),
+            click=lambda x, y: clicks.append((x, y)) or True,
+            max_steps=6,
+            settle_seconds=0,
+        )
+
+        self.assertTrue(result)
+        self.assertEqual(clicks, [(312, 344)])
+        self.assertGreaterEqual(provider.check_calls, 3)
+        self.assertGreaterEqual(provider.next_calls, 3)
 
     def test_visual_navigator_bounded_click_loop(self):
         provider = FakeProvider()
